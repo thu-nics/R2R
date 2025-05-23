@@ -1,0 +1,74 @@
+{
+  "model": {
+    "model_type": "HiddenStatesTokenLMHeadLogitsClassifier",
+    "init_args": {
+      "hidden_states_size": 1536,
+      "logits_size": 100,
+      "hidden_dims": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "expansion_factor": 4,
+      "dropout_rate": 0.1,
+      "dtype": "float32",
+      "use_position_embedding": false,
+      "freeze_lm_head": true,
+      "normalize_input": false
+    },
+    "model_specific_args": {},
+    "input_type": [
+      "hidden_states",
+      "token",
+      "logits"
+    ],
+    "output_type": "binary"
+  },
+  "data": {
+    "train": {
+      "path": [
+        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=train"
+      ],
+      "type": "divergent",
+      "input_prefix": "small_"
+    },
+    "test": {
+      "path": [
+        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=test"
+    ],
+      "type": "divergent",
+      "input_prefix": "small_"
+    }
+  },
+  "training": {
+    "optimizer": {
+      "lr": 5e-05,
+      "weight_decay": 5e-04
+    },
+    "params": {
+      "num_epochs": 50,
+      "batch_size": 1024,
+      "patience": 10,
+      "device": "cuda"
+    },
+    "loss": {
+      "type": "BCEWithLogitsLoss",
+      "recall_factor": 1.0
+    },
+    "validation": {
+      "valid_freq": 2
+    }
+  },
+  "optimizing": {
+    "type": "threshold",
+    "min_recall": 0.95
+  },
+  "output": {
+    "output_dir": "resource/default_router.pt",
+    "checkpoint_dir": "output/checkpoint",
+    "model_name": null
+  }
+}

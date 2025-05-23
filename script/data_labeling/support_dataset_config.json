@@ -1,0 +1,105 @@
+{
+    "default": {
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "content"
+            }
+        ],
+        "add_generation_prompt": true,
+        "type": "default"
+    },
+    "aime":{
+        "dataset_path": "di-zhang-fdu/AIME_1983_2024",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "Question"
+            }
+        ], 
+        "add_generation_prompt": true,
+        "type": "Math"
+    },
+    "gpqa_extended": {
+        "dataset_path": "Idavidrein/gpqa",
+        "dataset_subset": "gpqa_extended",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "Question"
+            }
+        ],
+        "query_format":{
+            "query_type":"multiple_choice",
+            "question_field":"Question",
+            "options_fields":["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"]
+        },
+        "add_generation_prompt": true,
+        "type": "QA"
+    },
+    "Bespoke-Stratos-17k-Math": {
+        "dataset_path": "bespokelabs/Bespoke-Stratos-17k",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "question"
+            }
+        ],
+        "add_generation_prompt": true,
+        "filter": "math_filter",
+        "type": "Math"
+    },
+    "Bespoke-Stratos-17k-Code": {
+        "dataset_path": "bespokelabs/Bespoke-Stratos-17k",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "question"
+            }
+        ],
+        "add_generation_prompt": true,
+        "filter": "code_filter",
+        "type": "Code"
+    },
+    "Bespoke-Stratos-17k-QA": {
+        "dataset_path": "bespokelabs/Bespoke-Stratos-17k",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "question"
+            }
+        ],
+        "add_generation_prompt": true,
+        "filter": "qa_filter",
+        "type": "QA"
+    },
+    "Bespoke-Stratos-17k": {
+        "dataset_path": "bespokelabs/Bespoke-Stratos-17k",
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "question"
+            }
+        ],
+        "add_generation_prompt": true,
+        "type": "default"
+    },
+    "R2R_dataset":{
+        "id_field": "id",
+        "message_format": [
+            {
+                "role": "user",
+                "content_field": "question"
+            }
+        ],
+        "add_generation_prompt": true,
+        "type": "default"
+    }
+}

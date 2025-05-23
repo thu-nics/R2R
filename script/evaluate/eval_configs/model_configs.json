@@ -1,0 +1,22 @@
+{
+    "deepseek-1.5b": {
+        "name": "DeepSeek-R1-Distill-Qwen-1.5B",
+        "path": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        "param": "1.5"
+    },
+    "deepseek-7b": {
+        "name": "DeepSeek-R1-Distill-Qwen-7B",
+        "path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-7B",
+        "param": "7"
+    },
+    "deepseek-14b": {
+        "name": "DeepSeek-R1-Distill-Qwen-14B",
+        "path": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "param": "14"
+    },
+    "deepseek-32b": {
+        "name": "DeepSeek-R1-Distill-Qwen-32B",
+        "path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-32B",
+        "param": "32"
+    }
+}

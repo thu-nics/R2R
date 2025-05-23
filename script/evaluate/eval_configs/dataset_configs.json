@@ -1,0 +1,93 @@
+{
+    "aime": {
+        "name": "AIME Mathematical Problems, default to AIME24",
+        "path": "Maxwell-Jia/AIME_2024",
+        "answer_type": "boxed",
+        "id_field": "ID",
+        "question_field": "Problem",
+        "answer_field": "Answer",
+        "prompt_template": "{question}",
+        "description": "American Invitational Mathematics Examination problems with numerical answers"
+    },
+    "aime23": {
+        "name": "AIME Mathematical Problems",
+        "path": "di-zhang-fdu/AIME_1983_2024",
+        "answer_type": "boxed",
+        "id_field": "ID",
+        "question_field": "Question",
+        "answer_field": "Answer",
+        "prompt_template": "{question}",
+        "description": "American Invitational Mathematics Examination problems with numerical answers from 1983 to 2024",
+        "filter": {
+            "key": "Year",
+            "value": [2023]
+        }
+    },
+    "aime24": {
+        "name": "AIME Mathematical Problems",
+        "path": "Maxwell-Jia/AIME_2024",
+        "answer_type": "boxed",
+        "id_field": "ID",
+        "question_field": "Problem",
+        "answer_field": "Answer",
+        "prompt_template": "{question}",
+        "description": "American Invitational Mathematics Examination problems with numerical answers"
+    },
+    "gpqa": {
+        "name": "GPQA Diamond Multiple Choice",
+        "path": "Idavidrein/gpqa",
+        "dataset_config": "gpqa_diamond",
+        "answer_type": "multiple_choice",
+        "id_field": "Record ID",
+        "question_field": "Question",
+        "answer_field": "Correct Answer",
+        "prompt_template": "",
+        "options_fields": ["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
+        "description": "Graduate-level multiple-choice questions across various domains"
+    },
+    "gpqa_extended": {
+        "name": "GPQA Extended Multiple Choice",
+        "path": "Idavidrein/gpqa",
+        "dataset_config": "gpqa_extended",
+        "answer_type": "multiple_choice",
+        "id_field": "Record ID",
+        "question_field": "Question",
+        "answer_field": "Correct Answer",
+        "prompt_template": "",
+        "options_fields": ["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
+        "description": "Graduate-level multiple-choice questions across various domains"
+    },
+    "mmlu-pro":{
+        "name": "MMLU-Pro",
+        "path": "TIGER-Lab/MMLU-Pro",
+        "answer_type": "mmlu-multiple-choice",
+        "id_field": "question_id",
+        "question_field": "question",
+        "answer_field": "answer",
+        "prompt_template": "",
+        "options_fields": "options",
+        "description": "Multiple-choice questions from MMLU-Pro dataset",
+        "selected_subjects": "all"
+    },
+    "aime25": {
+        "name": "AIME Mathematical Problems",
+        "path": "yentinglin/aime_2025",
+        "answer_type": "boxed",
+        "id_field": "id",
+        "question_field": "problem",
+        "answer_field": "answer",
+        "prompt_template": "{question}",
+        "description": "American Invitational Mathematics Examination problems with numerical answers"
+    },
+    "livecodebench": {
+        "name": "LiveCodeBench",
+        "path": "livecodebench/code_generation_lite",
+        "dataset_config": "v4_v5",
+        "answer_type": "livecodebench",
+        "id_field": "question_id",
+        "question_field": "question_content",
+        "answer_field": "public_test_cases",
+        "prompt_template": "{question}",
+        "description": "LiveCodeBench dataset"
+    }
+}
