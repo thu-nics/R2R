@@ -28,8 +28,7 @@ from typing import Dict, Any, Optional, Union, List
 from tqdm import tqdm
 from datetime import datetime
 from datasets.features import ClassLabel
-
-from r2r.models.router import visualize_model, create_classifier
+from r2r.models.router import create_classifier
 from r2r.train.loss import FocalLoss, DPOLoss
 from r2r.train.logger import filter_data_id_critical, filter_is_mismatch, filter_has_divergent, print_training_progress, TrainingHistory
 from r2r.models.router import save_model, load_model
@@ -555,10 +554,6 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
     input_type = model_config.get("input_type", ["logits"])
     print(f"Using input types: {input_type}")
 
-    visualize_model(
-        model,
-        output_file="model_architecture.png",
-    )
     output_type = model_config.get("output_type", "binary")
 
     """Data"""
