@@ -1,9 +1,6 @@
-# run quick model on one gpu using sglang and reference model on two gpus using sglang
-import os
 import uuid
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Optional, Tuple, Union, List
 import multiprocessing as mp
 import torch.distributed as dist
@@ -15,17 +12,13 @@ from r2r.utils.config import (
     REFERENCE_COLOR,
     RESET,
 )
-from r2r.utils.sampling import sample_token
 from r2r.utils.switching import create_switching_strategy
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 
-import sglang as sgl
-from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
 from sglang.srt.managers.scheduler import Scheduler
-from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.server_args import PortArgs, ServerArgs
 
 
@@ -47,7 +40,8 @@ class DynamicSimpleSGLangSelector:
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy_name = switching_strategy
         self.is_record = is_record
-        self.world_size = 2
+        self.num_gpus = reference_sglang_kwargs.get("tp_size", torch.cuda.device_count())
+        self.world_size = self.num_gpus
 
         # Create dictionary to store recorders
         self.generation_records = {}
@@ -56,13 +50,11 @@ class DynamicSimpleSGLangSelector:
         quick_sglang_kwargs = {**(sglang_kwargs or {})}
         reference_sglang_kwargs = {**(sglang_kwargs or {})}
 
-        self.num_gpus = reference_sglang_kwargs.get("tp_size", torch.cuda.device_count())
-        quick_sglang_kwargs["tp_size"] = 1
-        # reference_sglang_kwargs["tp_size"] = self.num_gpus - 1
-        # print(f"Using {self.num_gpus} GPUs for SGLang, with {self.num_gpus - 1} for reference and 1 for quick")
+        # Currently only support tp_size=1 for quick model
+        quick_sglang_kwargs["tp_size"] = 1 
         reference_sglang_kwargs["tp_size"] = self.world_size
-        assert self.num_gpus >= 2, f"Using {self.num_gpus} GPUs for SGLang, expected 2"
-        print(f"Using {self.num_gpus} GPUs for SGLang, with 2 for reference and 1 for quick")
+        assert self.num_gpus >= 2, f"Using {self.num_gpus} GPUs for SGLang, expected larger than 2."
+        print(f"Using {self.num_gpus} GPUs for SGLang, with {self.world_size} for reference and 1 for quick.")
 
         # Initialize SGLang models
         print(f"Loading quick model {MODEL_DICT['quick']['model_name']}...")
@@ -99,15 +91,14 @@ class DynamicSimpleSGLangSelector:
         )
 
         self.reference_model_input_queues = [mp.Queue() for _ in range(self.world_size)]
+        self.reference_model_ack_queues = [mp.Queue() for _ in range(self.world_size)]
         self.reference_model_output_queue = mp.Queue()
-        # self.reference_model_proc = mp.Process(target=self.reference_model_worker, args=(self.reference_server_args, self.reference_model_input_queue, self.reference_model_output_queue, 1))
-        # self.reference_model_proc.start()
-        # 替换 mp.spawn 部分
+
         self.reference_model_procs = []
         for rank in range(self.world_size):
             proc = mp.Process(
                 target=self.reference_model_worker,
-                args=(rank, self.world_size, self.reference_server_args, self.reference_model_input_queues, self.reference_model_output_queue)
+                args=(rank, self.world_size, self.reference_server_args, self.reference_model_input_queues, self.reference_model_output_queue, self.reference_model_ack_queues[rank]),
             )
             proc.start()
             self.reference_model_procs.append(proc)
@@ -170,13 +161,14 @@ class DynamicSimpleSGLangSelector:
         self.quick_scheduler.last_batch = batch
 
     @staticmethod
-    def reference_model_worker(rank, world_size: int, server_args: ServerArgs, input_queues: List[mp.Queue], output_queue: mp.Queue):
+    def reference_model_worker(rank, world_size: int, server_args: ServerArgs, input_queues: List[mp.Queue], output_queue: mp.Queue, ack_queue: mp.Queue):
 
         # initialize the process group
-        os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '29592'
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
+
+        global end_of_cache_loc
+        end_of_cache_loc = 0
 
         input_queue = input_queues[rank]
         port_args = PortArgs.init_new(server_args)
@@ -193,23 +185,30 @@ class DynamicSimpleSGLangSelector:
             if isinstance(reqs, int):
                 # terminate the process
                 break
-            new_batch = ScheduleBatch.init_new(
-                reqs,
-                scheduler.req_to_token_pool,
-                scheduler.token_to_kv_pool_allocator,
-                scheduler.tree_cache,
-                scheduler.model_config,
-                scheduler.enable_overlap,
-                scheduler.spec_algorithm,
-                scheduler.server_args.enable_custom_logit_processor,
-            )
-            DynamicSimpleSGLangSelector.simple_prepare_for_extend(new_batch)
-            batch = new_batch.get_model_worker_batch()
-            logits_output, next_token_ids = scheduler.tp_worker.forward_batch_generation(batch)
-            next_token_ids_list = next_token_ids.tolist()
+            elif isinstance(reqs, str):
+                if reqs == "RESET_CACHE":
+                    # reset the cache
+                    end_of_cache_loc = 0
+                    ack_queue.put(end_of_cache_loc)
+                    continue
+            else:
+                new_batch = ScheduleBatch.init_new(
+                    reqs,
+                    scheduler.req_to_token_pool,
+                    scheduler.token_to_kv_pool_allocator,
+                    scheduler.tree_cache,
+                    scheduler.model_config,
+                    scheduler.enable_overlap,
+                    scheduler.spec_algorithm,
+                    scheduler.server_args.enable_custom_logit_processor,
+                )
+                DynamicSimpleSGLangSelector.simple_prepare_for_extend(new_batch)
+                batch = new_batch.get_model_worker_batch()
+                _, next_token_ids = scheduler.tp_worker.forward_batch_generation(batch)
+                next_token_ids_list = next_token_ids.tolist()
 
-            if rank == 0:
-                output_queue.put(next_token_ids_list)
+                if rank == 0:
+                    output_queue.put(next_token_ids_list)
 
     def init_model_switching_strategy(self):
         """Initialize or reinitialize the model switching strategy with stored parameters"""
@@ -219,11 +218,12 @@ class DynamicSimpleSGLangSelector:
 
     @staticmethod
     def simple_prepare_for_extend(batch: ScheduleBatch):
+        global end_of_cache_loc
         batch.forward_mode = ForwardMode.EXTEND
 
         # Allocate req slots
         bs = len(batch.reqs)
-        req_pool_indices = list(range(bs))
+        req_pool_indices = [req.rid for req in batch.reqs]
 
         # Init tensors
         reqs = batch.reqs
@@ -248,26 +248,14 @@ class DynamicSimpleSGLangSelector:
         for i, (req, seq_len, pre_len) in enumerate(zip(reqs, seq_lens, prefix_lens)):
             req.req_pool_idx = req_pool_indices[i]
             assert seq_len - pre_len == req.extend_input_len
-            if pre_len > 0:
-                batch.req_to_token_pool.write(
-                    (req.req_pool_idx, slice(0, pre_len)),
-                    torch.tensor(req.prefix_indices, dtype=torch.int32).to(
-                        "cuda", non_blocking=True
-                    ),
-                )
             req.cached_tokens += pre_len - req.already_computed
             req.already_computed = seq_len
             req.is_retracted = False
-        
-        # Calculate offsets for token placement
-        offsets = [0]
-        for i in range(1, bs):
-            offsets.append(offsets[i-1] + extend_lens[i-1])
-        
         # Allocate memory for multiple sequences
         out_cache_locs = []
         for i in range(bs):
-            start = prefix_lens[i]
+            start = end_of_cache_loc
+            end_of_cache_loc += extend_lens[i]
             end = start + extend_lens[i]
             out_cache_loc = torch.arange(
                 start=start,
@@ -317,7 +305,7 @@ class DynamicSimpleSGLangSelector:
         reqs = []
         for i, (input_text, input_id) in enumerate(zip(input_texts, input_ids)):
             req = Req(
-                rid=i,
+                rid=input_indices[i],
                 origin_input_text=input_text,
                 origin_input_ids=input_id,
                 sampling_params=sampling_params,
@@ -337,10 +325,6 @@ class DynamicSimpleSGLangSelector:
         # Update prefix indices for each prompt
         for i in range(subset_batch_size):
             self.reference_prefix_indices_list[input_indices[i]]=list(range(len(input_ids[i])))
-            # if len(self.reference_prefix_indices_list[input_indices[i]]) == 0:
-            #     self.reference_prefix_indices_list[input_indices[i]] = list(range(len(input_ids[i])))
-            # else:
-            #     self.reference_prefix_indices_list[input_indices[i]].append(self.reference_prefix_indices_list[input_indices[i]][-1] + 1)
 
         return next_token_ids
 
@@ -422,6 +406,8 @@ class DynamicSimpleSGLangSelector:
             If record_generation is False: list of generated texts
             If record_generation is True: tuple of (list of generated texts, list of GenerationRecorders)
         """
+
+        self.reset_cache_simple()
         batch_input_ids = input_ids
         batch_size = len(batch_input_ids)
         self.reference_prefix_indices_list = [[] for _ in range(batch_size)]
@@ -470,8 +456,6 @@ class DynamicSimpleSGLangSelector:
 
         # Generate tokens one by one until all prompts reach EOS or max limit
         position = 0
-
-        output_ids = [[] for _ in range(batch_size)]
 
         if not print_tokens:
             # Create tqdm progress bar for token generation
@@ -604,17 +588,23 @@ class DynamicSimpleSGLangSelector:
             return generated_texts, recorders
         return generated_texts, None
 
+    def reset_cache_simple(self):
+        """Reset the cache for the quick model"""
+        for q in self.reference_model_input_queues:
+            q.put_nowait("RESET_CACHE")
+        # Wait for acknowledgment from the reference model
+        for q in self.reference_model_ack_queues:
+            ack = q.get()    
+            print(f"cache location reset to {ack}")
+
     def shutdown(self):
         """Shut down the SGLang engines to free resources"""
-        if hasattr(self, "quick_model"):
-            self.quick_model.shutdown()
-        # if hasattr(self, "quick_scheduler"):
-        #     self.quick_scheduler.close_session()
-        if hasattr(self, "reference_model"):
-            self.reference_model.shutdown()
+        for q in self.reference_model_input_queues:
+            q.put_nowait(-1)  # Termination signal
 
     def __del__(self):
-        for proc in self.reference_model_procs:
-            if proc.is_alive():
-                proc.terminate()
-                proc.join()
+        if hasattr(self, "reference_model_procs"):
+            for proc in self.reference_model_procs:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join()

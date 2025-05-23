@@ -1,9 +1,12 @@
+import os
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ['MASTER_PORT'] = '29500'
+os.environ['SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK'] = '1'
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 import pandas as pd
-import os
 import json
 from typing import Dict, List, Tuple, Callable, Any, Optional
 import numpy as np
@@ -84,7 +87,7 @@ def parse_args():
                     help='Top-k filtering parameter for sampling (default: -1)')
     parser.add_argument('--beam_size', type=int, default=3,
                       help='Beam size for tree-based generation')
-    parser.add_argument('--tp_size', type=int, default=1, help='Number of tensor parallel GPUs')
+    parser.add_argument('--tp_size', type=int, default=2, help='Number of tensor parallel GPUs')
     parser.add_argument('--dp_size', type=int, default=1, help='Number of data parallel GPUs')
     # Debug configuration
     parser.add_argument('--debug', action='store_true',
@@ -114,7 +117,7 @@ def parse_args():
     parser.add_argument('--reference_prob', type=float, default=0.5,
                       help='Probability of selecting the reference model')
     
-    parser.add_argument('--test_run_time', default=True,
+    parser.add_argument('--test_run_time', type=bool, default=True,
                       help='Test run time of the model')
     
     # Add job-based processing arguments
