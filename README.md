@@ -18,10 +18,10 @@ conda activate r2r
 pip install -e .
 ```
 
-Install `flashinfer-python==0.2.3` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
+Install `flashinfer` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
 
 ```bash
-pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6/
+pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.6/
 ```
 
 ## 🚀 Usage
@@ -68,7 +68,7 @@ processing. Customize datasets using `--dataset_config`:
 python script/data_labeling/init_dataset_conversion.py --dataset_config aime,gpqa_extended,Bespoke-Stratos-17k-Code,Bespoke-Stratos-17k-QA --output_dir output/query_dataset
 ```
 
-> **Alternative**: Skip this step by using our pre-processed dataset: `--dataset_path AnonymousPaperReview/R2R_query --use_hf_dataset`
+> **Alternative**: Skip this step by using our pre-processed dataset `AnonymousPaperReview/R2R_query`.
 
 > **Add new dataset:** customize the configuration file to standardize new dataset following the format in `script/data_labeling/support_dataset_config.json`.
 
@@ -79,7 +79,7 @@ Generate responses using a large language model (default: `DeepSeek-R1-Distill-Q
 ```bash
 python script/data_labeling/step_0_llm_response.py --model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --dataset_path output/query_dataset --output_dir output/query_dataset/LLM_response --tp_size 2
 ```
-We recommend using complete LLM responses within the 32K token limit for subsequent processing, saved under the `datasets_finished/` folder.
+We recommend using complete LLM responses within the 32K token limit for subsequent processing, saved under the `datasets_finished/` folder. Alternatively, to use the pre-processed dataset, passing `--dataset_path AnonymousPaperReview/R2R_query --use_hf_dataset` in the instruction above.
 
 ##### Step 1: SLM Prefill Analysis
 
