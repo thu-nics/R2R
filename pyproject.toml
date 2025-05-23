@@ -1,0 +1,20 @@
+[build-system]
+requires = [ "setuptools>=64.0.0", "wheel",]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "r2r"
+version = "0.0.1"
+description = "Mix inference with small language models and large language models at token level for efficiency"
+readme = "README.md"
+classifiers = [ "Programming Language :: Python :: 3", "License :: OSI Approved :: Apache Software License",]
+requires-python = ">=3.8"
+dependencies = [ "sglang[all]==0.4.6", "flashinfer-python==0.2.3", "torch==2.6.0", "scikit-learn",]
+
+[project.optional-dependencies]
+train = [ "jieba==0.42.1", "nltk==3.9.1",]
+
+[tool.setuptools.packages.find]
+where = [ ".",]
+include = [ "r2r",]
+exclude = [ "tests*", "scripts*",]
