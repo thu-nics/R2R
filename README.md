@@ -18,6 +18,12 @@ conda activate r2r
 pip install -e .
 ```
 
+Install `flashinfer-python==0.2.3` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
+
+```bash
+pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6/
+```
+
 ## 🚀 Usage
 
 ### 1. 💬 Run Mix inference with R2R
@@ -80,10 +86,7 @@ We recommend using complete LLM responses within the 32K token limit for subsequ
 Use the small language model (`DeepSeek-R1-Distill-Qwen-1.5B`) to prefill and find non-identical LLM responses:
 
 ```bash
-python script/data_labeling/step_1_slm_prefill.py --dataset_path 
-output/query_dataset/LLM_response/dataset_finished --test_model_list 
-deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --output_path output/
-query_dataset/LLM_response/SLM_prefill
+python script/data_labeling/step_1_slm_prefill.py --dataset_path output/query_dataset/LLM_response/dataset_finished --test_model_list deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --output_path output/query_dataset/LLM_response/SLM_prefill
 ```
 
 This generates SLM predictions, top-100 logits, and hidden states.
@@ -93,10 +96,7 @@ This generates SLM predictions, top-100 logits, and hidden states.
 Use the LLM to continue from SLM's non-identical prefill positions:
 
 ```bash
-python script/data_labeling/step_2_llm_continuation.py --input_path 
-output/query_dataset/LLM_response/SLM_prefill/prediction_comparison.
-csv --output_path output/query_dataset/LLM_response/SLM_prefill/
-LLM_continuation_verify --tp_size 2
+python script/data_labeling/step_2_llm_continuation.py --input_path output/query_dataset/LLM_response/SLM_prefill/prediction_comparison.csv --output_path output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify --tp_size 2
 ```
 
 > **Note**: To use different models or loading path, edit the configuration in `r2r/utils/config.py`
@@ -106,12 +106,7 @@ LLM_continuation_verify --tp_size 2
 Use `Qwen2.5-72B-Instruct` to verify whether LLM continuation responses are divergent:
 
 ```bash
-python script/data_labeling/step_3_verify.py --input_csv output/
-query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/
-generation_results_data_all_real_full.csv --output_csv output/
-query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/
-generation_results_data_all_real_full_verify.csv --verify_model Qwen/Qwen2.
-5-72B-Instruct --tp_size 4
+python script/data_labeling/step_3_verify.py --input_csv output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/generation_results_data_all_real_full.csv --output_csv output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/generation_results_data_all_real_full_verify.csv --verify_model Qwen/Qwen2.5-72B-Instruct --tp_size 4
 ```
 
 ##### Step 5: Construct Training Dataset

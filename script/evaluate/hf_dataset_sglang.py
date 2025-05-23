@@ -11,8 +11,6 @@ from datetime import datetime
 import math
 from tqdm import tqdm
 import argparse
-from r2r.alpha.models.dynamic_selector import DynamicModelSelector, DynamicTreeBeamSelector
-# from dynamic_inference.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 from r2r.evaluate.eval_utils import get_answer_extractor, check_answer_correctness
 from r2r.evaluate.eval_utils import QUERY_TEMPLATE_MULTICHOICE, ANSWER_PATTERN_MULTICHOICE
@@ -53,7 +51,7 @@ def parse_args():
     parser.add_argument('--model_param', type=float, default=1.5,
                       help='Model parameter size in billions')
     parser.add_argument('--generator', type=str, default='sglang',
-                      choices=['linear', 'tree', 'vllm', 'sglang'],
+                      choices=['sglang'],
                       help='Generator for dynamic model selection')
     # Dataset configuration
     parser.add_argument('--dataset', type=str, default='aime',
@@ -291,26 +289,16 @@ def process_with_model(
         # initialize generator
         kwargs_init = dict()
         kwargs_generation = dict()
-        if args.generator == "linear":
-            generator_class = DynamicModelSelector
-        elif args.generator == "tree":
-            generator_class = DynamicTreeBeamSelector
-            kwargs_generation = {
-                "beam_size": args.beam_size
-            }
-        elif args.generator == "sglang":
-            # generator_class = DynamicSGLangSelector
+
+        if args.generator == "sglang":
             generator_class = DynamicSimpleSGLangSelector
-            num_gpus = torch.cuda.device_count()
             kwargs_init = {
                 "sglang_kwargs": {
                     "dtype": "bfloat16",
-                    "tp_size": num_gpus,
+                    "tp_size": args.tp_size,
                 }
             }
-            print(f"Using {num_gpus} GPUs for SGLang")
-        elif args.generator == "sglang_vllm":
-            raise NotImplementedError("VLLM is not supported for now")
+            print(f"Using {args.tp_size} GPUs for SGLang")
         else:
             raise ValueError(f"Invalid generator: {args.generator}")
         generator = generator_class(
@@ -366,7 +354,7 @@ def evaluate_problem(
     batch_size: int = 1,
     device: str = "cuda",
     use_hybrid: bool = False,
-    generator: DynamicModelSelector = None,
+    generator: DynamicSimpleSGLangSelector = None,
     test_run_time: bool = False,
     sampling_params: Dict = None,
     **kwargs_generation
