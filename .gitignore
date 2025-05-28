@@ -3,6 +3,9 @@
 *.pdf
 *.html
 *.json
+!script/evaluate/eval_configs/r2r_configs.json
+!script/evaluate/eval_configs/dataset_configs.json
+!script/evaluate/eval_configs/model_configs.json
 *.jsonl
 *.txt
 *.log

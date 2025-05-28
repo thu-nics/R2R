@@ -208,9 +208,20 @@ def save_model(
     import os
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
+    # Save the model config with all parameters
+    output_file_all = output_file.replace(".pt", "_all.pt")
+    torch.save(model_config, output_file_all)
+    
+    # Remove token_embeddings.weight from state_dict
+    if 'token_embeddings.weight' in model_config["state_dict"]:
+        del model_config["state_dict"]['token_embeddings.weight']
+        print(f"Removed 'token_embeddings.weight' from state_dict")
+    else:
+        print(f"No 'token_embeddings.weight' to remove from state_dict")
+    
+    # Save the model config with only the parameters trained
     torch.save(model_config, output_file)
-
+    
     # Print information about the saved model
     threshold_info = f" with threshold {threshold}" if threshold is not None else ""
     kwargs_info = f" and {len(kwargs)} additional parameters" if kwargs else ""
@@ -220,7 +231,7 @@ def save_model(
     )
 
 
-def load_model(model_path: str, device: str = "cuda") -> tuple[nn.Module, dict]:
+def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Module, dict]:
     """
     Load a model from a saved file.
 
@@ -248,6 +259,14 @@ def load_model(model_path: str, device: str = "cuda") -> tuple[nn.Module, dict]:
 
     # Load state dict
     if state_dict is not None:
+        # Check if model has token_embeddings and if the state_dict is missing token_embeddings.weight
+        if hasattr(model, 'token_embeddings') and 'token_embeddings.weight' not in state_dict:
+            # Add it to the state_dict
+            state_dict['token_embeddings.weight'] = model.token_embeddings.weight
+            print(f"Added 'token_embeddings.weight' to state_dict")
+        else:
+            print(f"No 'token_embeddings.weight' to add to state_dict")
+        
         model.load_state_dict(state_dict)
     else:
         raise ValueError("State dict is not found in the model configuration")
@@ -1769,4 +1788,3 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
             max_position_embeddings=max_position_embeddings,
             apply_softmax=apply_softmax,
         )
-

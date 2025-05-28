@@ -22,9 +22,17 @@ import time
 import sglang as sgl
 from sglang.srt.hf_transformers_utils import get_tokenizer
 from r2r.evaluate.eval_utils import select_by_category, generate_cot_prompt, preprocess
+import multiprocessing as mp
+import warnings
+
 # set numpy random seed
 np.random.seed(42)
-import multiprocessing as mp
+
+# Suppress all warnings
+warnings.filterwarnings("ignore")
+os.environ["SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+torch.set_warn_always(False)
 
 # Load dataset configurations from JSON file
 def load_configs() -> Dict:
@@ -41,8 +49,23 @@ def load_configs() -> Dict:
     except json.JSONDecodeError:
         raise ValueError(f"Invalid JSON format in dataset configuration file at {dataset_config_path}, {model_config_path}")
 
+# Load r2r configurations from JSON file
+def load_r2r_configs() -> Dict:
+    r2r_config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'evaluate/eval_configs/r2r_configs.json')
+    try:
+        with open(r2r_config_path, 'r') as f:
+            r2r_configs = json.load(f)
+        return r2r_configs
+    except FileNotFoundError:
+        print(f"Warning: R2R configuration file not found at {r2r_config_path}")
+        return {}
+    except json.JSONDecodeError:
+        print(f"Warning: Invalid JSON format in R2R configuration file at {r2r_config_path}")
+        return {}
+
 # Load dataset configurations
 DATASET_CONFIGS, MODELS = load_configs()
+R2R_CONFIGS = load_r2r_configs()
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate models on different datasets')
@@ -154,6 +177,23 @@ def parse_args():
     
     # Store dataset config in args for easy access
     args.dataset_config_dict = dataset_config
+    
+    # Load router_path and threshold from r2r configs
+    if args.dataset in R2R_CONFIGS:
+        r2r_config = R2R_CONFIGS[args.dataset]
+        # Handle router_path
+        if 'router_path' in r2r_config:
+            if args.router_path != r2r_config['router_path']:
+                warnings.warn(
+                    f"Router path mismatch for dataset '{args.dataset}': "
+                    f"provided '{args.router_path}' but r2r config specifies '{r2r_config['router_path']}'"
+                )
+            else:
+                print(f"Using provided router_path (matches r2r config): {args.router_path}")
+        # Handle threshold (only load if not provided)
+        if args.threshold is None and 'threshold' in r2r_config:
+            args.threshold = r2r_config['threshold']
+            print(f"Using threshold from r2r config: {args.threshold}")
     
     if args.split_jobs and 'job' not in args.output_dir and args.job_id >= 0:
         args.output_dir = os.path.join(args.output_dir, f'job_{args.job_id}')

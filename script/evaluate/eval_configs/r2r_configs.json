@@ -1,0 +1,18 @@
+{
+    "aime":{
+        "router_path": "resource/default_router.pt",
+        "threshold": 0.40595959595959596
+    },
+    "aime24":{
+        "router_path": "resource/default_router.pt",
+        "threshold": 0.40595959595959596
+    },
+    "gpqa":{
+        "router_path": "resource/default_router.pt",
+        "threshold": 0.42
+    },
+    "livecodebench":{
+        "router_path": "resource/default_router.pt",
+        "threshold": 0.1387
+    }
+}
