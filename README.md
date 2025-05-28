@@ -1,6 +1,6 @@
 # R2R: Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing
 
-**[[project page](https://fuvty.github.io/R2R_Project_Page/)]**
+**[[Project Page](https://fuvty.github.io/R2R_Project_Page/)]**
 
 Roads to Rome (R2R) is a neural token router that efficiently combines Large Language Models (LLMs) and Small Language Models (SLMs) by selectively routing only critical, reasoning-divergent tokens to the large model. 
 
@@ -34,7 +34,7 @@ pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.6/
 
 We provide an interactive example in `interactive_chat.py`. The main `DynamicSimpleSGLangSelector` class follows the SGLang offline Engine API and supports the `.generate()` method for getting responses.
 
-You can download our pre-trained router from [HuggingFace](https://huggingface.co/AnonymousPaperReview/R2R_router/tree/main). Pass in the local path to the R2R router to use it:
+You can download our pre-trained router from [HuggingFace](https://huggingface.co/nics-efc/R2R_router/tree/main). Pass in the local path to the R2R router to use it:
 
 ```bash
 python script/playground/interactive_chat.py --router_path resource/default_router.pt
@@ -60,7 +60,7 @@ To train a custom R2R router for any LLM-SLM pair, you need to:
 
 #### 3.1 Dataset Preparation
 
-We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/AnonymousPaperReview/R2R_Divergence) and skip to section 3.2, or follow these steps to create your own dataset.
+We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow these steps to create your own dataset.
 
 ##### Initialize Dataset Conversion
 
@@ -72,7 +72,7 @@ processing. Customize datasets using `--dataset_config`:
 python script/data_labeling/init_dataset_conversion.py --dataset_config aime,gpqa_extended,Bespoke-Stratos-17k-Code,Bespoke-Stratos-17k-QA --output_dir output/query_dataset
 ```
 
-> **Alternative**: Skip this step by using our pre-processed dataset `AnonymousPaperReview/R2R_query`.
+> **Alternative**: Skip this step by using our pre-processed dataset [`nics-efc/R2R_query`](https://huggingface.co/datasets/nics-efc/R2R_query/tree/main).
 
 > **Add new dataset:** customize the configuration file to standardize new dataset following the format in `script/data_labeling/support_dataset_config.json`.
 
@@ -83,7 +83,7 @@ Generate responses using a large language model (default: `DeepSeek-R1-Distill-Q
 ```bash
 python script/data_labeling/step_0_llm_response.py --model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --dataset_path output/query_dataset --output_dir output/query_dataset/LLM_response --tp_size 2
 ```
-We recommend using complete LLM responses within the 32K token limit for subsequent processing, saved under the `datasets_finished/` folder. Alternatively, to use the pre-processed dataset, passing `--dataset_path AnonymousPaperReview/R2R_query --use_hf_dataset` in the instruction above.
+We recommend using complete LLM responses within the 32K token limit for subsequent processing, saved under the `datasets_finished/` folder. Alternatively, to use the pre-processed dataset, passing `--dataset_path nics-efc/R2R_query --use_hf_dataset` in the instruction above.
 
 ##### Step 1: SLM Prefill Analysis
 

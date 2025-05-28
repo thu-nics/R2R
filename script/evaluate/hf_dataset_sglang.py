@@ -30,7 +30,6 @@ np.random.seed(42)
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
-os.environ["SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 torch.set_warn_always(False)
 
