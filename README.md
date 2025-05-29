@@ -1,16 +1,26 @@
 # R2R: Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing
 
-**[[Project Page](https://fuvty.github.io/R2R_Project_Page/)]**
+**[[arXiv](https://arxiv.org/abs/2505.21600)]** **[[project page](https://fuvty.github.io/R2R_Project_Page/)]**
 
 Roads to Rome (R2R) is a neural token router that efficiently combines Large Language Models (LLMs) and Small Language Models (SLMs) by selectively routing only critical, reasoning-divergent tokens to the large model. 
 
 By combining DeepSeek's R1-1.5B and R1-32B models, R2R-5.6B achieves a 2.8× speedup over R1-32B while surpassing R1-7B and R1-14B by 1.6× and 1.1× in accuracy on challenging math, coding, and QA benchmarks.
 
+⭐ **Feel free to star this repo or cite our paper if you find it useful!**
+
+```bibtex
+@article{fu2025r2r,
+    title={R2R: Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing}, 
+    author={Tianyu Fu and Yi Ge and Yichen You and Enshu Liu and Zhihang Yuan and Guohao Dai and Shengen Yan and Huazhong Yang and Yu Wang},
+    journal={arXiv preprint arXiv:2505.21600},
+    year={2025},
+}
+```
+
 ## 🔗 Interactive Demo
 
 Check out our interactive demo and see R2R in action by visiting our [project page](https://fuvty.github.io/R2R_Project_Page/).
 
-⭐ **Feel free to star this repo or cite our paper if you find it useful!**
 
 ## 🛠️ Environment Setup
 
@@ -34,7 +44,7 @@ pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.6/
 
 We provide an interactive example in `interactive_chat.py`. The main `DynamicSimpleSGLangSelector` class follows the SGLang offline Engine API and supports the `.generate()` method for getting responses.
 
-You can download our pre-trained router from [HuggingFace](https://huggingface.co/nics-efc/R2R_router/tree/main). Pass in the local path to the R2R router to use it:
+You can download our pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main). Pass in the local path to the R2R router to use it:
 
 ```bash
 python script/playground/interactive_chat.py --router_path resource/default_router.pt
