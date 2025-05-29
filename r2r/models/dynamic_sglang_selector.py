@@ -40,15 +40,16 @@ class DynamicSimpleSGLangSelector:
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy_name = switching_strategy
         self.is_record = is_record
+        
+        # Combine default with provided kwargs
+        quick_sglang_kwargs = {**(sglang_kwargs or {})}
+        reference_sglang_kwargs = {**(sglang_kwargs or {})}
+        
         self.num_gpus = reference_sglang_kwargs.get("tp_size", torch.cuda.device_count())
         self.world_size = self.num_gpus
 
         # Create dictionary to store recorders
         self.generation_records = {}
-
-        # Combine default with provided kwargs
-        quick_sglang_kwargs = {**(sglang_kwargs or {})}
-        reference_sglang_kwargs = {**(sglang_kwargs or {})}
 
         # Currently only support tp_size=1 for quick model
         quick_sglang_kwargs["tp_size"] = 1 
