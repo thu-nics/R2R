@@ -32,12 +32,18 @@ conda activate r2r
 pip install -e .
 ```
 
-Install `flashinfer` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
+Install `flashinfer==0.2.3` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
 
 ```bash
-pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.6/
+pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6/
 ```
 
+> If you accidentally install the wrong flashinfer, please uninstall it before re-installation.
+> ```bash
+>pip uninstall flashinfer-python
+>rm -rf ~/.cache/flashinfer/
+>rm -rf ~/.triton/cache
+>```
 ## 🚀 Usage
 
 ### 1. 💬 Run Mix inference with R2R

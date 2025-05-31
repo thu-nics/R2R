@@ -596,7 +596,7 @@ class DynamicSimpleSGLangSelector:
         # Wait for acknowledgment from the reference model
         for q in self.reference_model_ack_queues:
             ack = q.get()    
-            print(f"cache location reset to {ack}")
+            # print(f"cache location reset to {ack}")
 
     def shutdown(self):
         """Shut down the SGLang engines to free resources"""
