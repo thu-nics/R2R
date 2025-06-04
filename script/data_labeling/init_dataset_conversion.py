@@ -118,7 +118,7 @@ def convert_dataset(args, dataset, config):
                     query_type = config["query_format"]["query_type"]
                     format_config = config["query_format"]
                     if query_type == "multiple_choice":
-                        content = prepare_multiple_choice_prompt(item, format_config)
+                        content, _ = prepare_multiple_choice_prompt(item, format_config)
                 
                 if content:  # Only add message if content is not empty
                     formatted_input = content
