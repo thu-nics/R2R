@@ -129,7 +129,7 @@ Use `Qwen2.5-72B-Instruct` to verify whether LLM continuation responses are dive
 python script/data_labeling/step_3_verify.py --input_csv output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/generation_results_data_all_real_full.csv --output_csv output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify/generation_results_data_all_real_full_verify.csv --verify_model Qwen/Qwen2.5-72B-Instruct --tp_size 4
 ```
 
-##### Step 5: Construct Training Dataset
+##### Step 4: Construct Training Dataset
 
 Convert all processed data into a structured dataset for router training:
 
