@@ -236,7 +236,7 @@ def translate_private_test_cases(encoded_data: str) -> dict[str, str]:
     original_data = pickle.loads(decompressed_data)
     return json.loads(original_data)
 
-def prepare_multiple_choice_prompt(line: dict[str, Any], format_config: dict[str, Any]) -> str:
+def prepare_multiple_choice_prompt(line: dict[str, Any], format_config: dict[str, Any]) -> tuple[str, str]:
     
     options_fields = format_config.get("options_fields", [])
     if len(options_fields) >= 4:  # Need at least 4 options for A, B, C, D
@@ -261,7 +261,7 @@ def prepare_multiple_choice_prompt(line: dict[str, Any], format_config: dict[str
             "D": shuffled_options[3]
         }
         answer = correct_letter
-                
+
         # Format the problem with options
         formatted_problem = QUERY_TEMPLATE_MULTICHOICE.format(
             Question=line[format_config["question_field"]],
@@ -270,5 +270,5 @@ def prepare_multiple_choice_prompt(line: dict[str, Any], format_config: dict[str
             C=options["C"],
             D=options["D"]
         )
-        
-        return formatted_problem
+
+        return formatted_problem, answer
