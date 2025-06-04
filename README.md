@@ -50,7 +50,7 @@ pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6
 
 We provide an interactive example in `interactive_chat.py`. The main `DynamicSimpleSGLangSelector` class follows the SGLang offline Engine API and supports the `.generate()` method for getting responses.
 
-You can download our pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main). Pass in the local path to the R2R router to use it:
+You can download the pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main) and place the file `default_router.pt` under `resource/` folder:
 
 ```bash
 python script/playground/interactive_chat.py --router_path resource/default_router.pt
