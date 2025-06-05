@@ -117,8 +117,11 @@ def validate_model(
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(data_loader):
-            # Unpack the batch - (inputs, labels, filters)
-            inputs, labels, filters = batch
+            # Unpack the batch
+            if len(batch) == 4:
+                inputs, labels, filters, _ = batch
+            else:
+                inputs, labels, filters = batch
             
             # Move data to device
             for key in inputs:
@@ -260,8 +263,11 @@ def train_model(
         running_loss = 0.0
 
         for batch_idx, batch in enumerate(train_loader):
-            # Unpack the batch - (inputs, labels, filters)
-            inputs, labels, filters = batch  
+            # Unpack the batch
+            if len(batch) == 4:
+                inputs, labels, filters, _ = batch
+            else:
+                inputs, labels, filters = batch
 
             # Move data to device
             for key in inputs:
@@ -272,7 +278,7 @@ def train_model(
             outputs = model(**inputs)
 
             labels = labels.to(device)
-            
+
             if output_type == "binary":
                 loss = criterion(outputs, labels.unsqueeze(1))
             elif output_type == "multiclass":
@@ -408,8 +414,16 @@ class InputLabelDataset(Dataset):
         self.use_hidden_states = "hidden_states" in self.input_type and self.hidden_states_col in dataset.column_names
         self.use_token = "token" in self.input_type and self.token_col in dataset.column_names
         
+        # Ensure mask column exists
+        if "mask" not in dataset.column_names:
+            print("'mask' column not found. Creating default mask of 1s.")
+            self.dataset = self.dataset.map(
+                lambda example: {"mask": 1},
+                batched=False
+            )
+
         # Set format to PyTorch tensors for required columns
-        columns = [self.label_column, "mismatch"]
+        columns = [self.label_column, "mismatch", "mask"]
         if self.use_logits:
             columns.append(self.logits_col)
         if self.use_hidden_states:
@@ -428,6 +442,7 @@ class InputLabelDataset(Dataset):
         # Convert label and filter columns
         converted_dataset[self.label_column] = self.dataset[self.label_column].float()
         converted_dataset["mismatch"] = self.dataset["mismatch"].float()
+        converted_dataset["mask"] = self.dataset["mask"].float()
         
         # Convert input columns
         if self.use_logits:
@@ -461,6 +476,7 @@ class InputLabelDataset(Dataset):
         # Get pre-converted label and filter
         label = self.converted_dataset[self.label_column][idx]
         filter_var = self.converted_dataset["mismatch"][idx]
+        mask = self.converted_dataset["mask"][idx]
         
         # Prepare inputs using pre-converted tensors (no type conversion needed)
         inputs = {}
@@ -471,7 +487,7 @@ class InputLabelDataset(Dataset):
         if self.use_token:
             inputs["token"] = self.converted_dataset[self.token_col][idx]
         
-        return inputs, label, filter_var
+        return inputs, label, filter_var, mask
 
 def get_probabilities_and_labels(model, data_loader, device, input_type=["logits"], output_type="binary"):
     """
@@ -705,6 +721,15 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
 
             else:
                 raise ValueError(f"Invalid filter type: {filter_config['type']}")
+
+        # Filter out samples where mask == 0 (question tokens)
+        if "mask" in datasets[split].column_names:
+            before = len(datasets[split])
+            # Reset format to avoid torch tensors in filter
+            datasets[split].set_format(type=None)
+            datasets[split] = datasets[split].filter(lambda ex: ex["mask"] == 1)
+            after = len(datasets[split])
+            print(f"Filtered {split} dataset by mask: {before} -> {after}")
 
     # Use multiple workers for faster data loading if available
     num_workers = 4 if torch.cuda.is_available() else 0

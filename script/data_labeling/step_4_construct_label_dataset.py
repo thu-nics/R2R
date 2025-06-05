@@ -225,17 +225,12 @@ def align_data(divergent_df, data_index_df):
             raise ValueError("think_token_location_next is 0")
 
         instruction_end_mask[data_id_start[0][i]:think_token_location_next] = 1
-    
-    # remove rows where instruction_end_mask is 1
+
+    # Create mask column: 0 for question tokens (instruction), 1 for answer tokens
+    merged_df['mask'] = (1 - instruction_end_mask).int().numpy()
+
     print(f"original data length: {len(merged_df)}")
-    merged_df['instruction_mask'] = instruction_end_mask.numpy()
-    merged_df = merged_df[merged_df['instruction_mask'] == 0]
-    print(f"data length after removing instruction: {len(merged_df)}")
-    
-    # remove temporary column
-    if 'instruction_mask' in merged_df.columns:
-        merged_df = merged_df.drop('instruction_mask', axis=1)
-    
+
     return merged_df, instruction_end_mask
 
 def create_dataset(batch_size=100000):
@@ -269,10 +264,8 @@ def create_dataset(batch_size=100000):
     # Align data using filtered_data_index_df as base
     aligned_df, instruction_end_mask = align_data(divergent_df, filtered_data_index_df)
     
-    # Filter tensors based on instruction_end_mask
-    filtered_small_logits = filtered_small_logits[instruction_end_mask == 0]
-    filtered_small_indices = filtered_small_indices[instruction_end_mask == 0]
-    filtered_small_last_hidden_states = filtered_small_last_hidden_states[instruction_end_mask == 0]
+    # No longer filter out question tokens; create mask from instruction_end_mask
+    mask = (1 - instruction_end_mask).int()
 
     # Define features for the dataset
 
@@ -286,6 +279,7 @@ def create_dataset(batch_size=100000):
         'small_indices': Sequence(feature=Value('int64')),
         'small_last_hidden_states': Sequence(feature=Value('float32')),
         'mismatch': Value('int64'),
+        'mask': Value('int64'),
     })
     
     # Calculate number of batches
@@ -313,6 +307,7 @@ def create_dataset(batch_size=100000):
             'small_indices': filtered_small_indices[start_idx:end_idx].numpy(),
             'small_last_hidden_states': filtered_small_last_hidden_states[start_idx:end_idx].numpy(),
             'mismatch': aligned_df['mismatch'].iloc[start_idx:end_idx].tolist(),
+            'mask': mask[start_idx:end_idx].tolist(),
         }
         
         # Create dataset for this batch
@@ -339,6 +334,7 @@ def create_dataset(batch_size=100000):
         'small_indices': filtered_small_indices.numpy(),
         'small_last_hidden_states': filtered_small_last_hidden_states.numpy(),
         'mismatch': aligned_df['mismatch'].tolist(),
+        'mask': mask.tolist(),
     }
     
     print(f"Dataset created with {len(dataset)} samples")
@@ -439,6 +435,7 @@ if __name__ == "__main__":
         'small_token': dataset_dict['small_token'],
         'real_token': dataset_dict['real_token'],
         'mismatch': dataset_dict['mismatch'],
+        'mask': dataset_dict['mask'],
     }
     df_scalar = pd.DataFrame(scalar_dict)
     df_scalar = df_scalar.sort_values(by=['data_id', 'token_id'])
