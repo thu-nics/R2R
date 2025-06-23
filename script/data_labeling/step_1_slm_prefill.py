@@ -23,6 +23,8 @@ import pandas as pd
 import glob
 import numpy as np
 
+from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
+
 def load_model(model_name):
     """Load a model with basic error handling"""
     try:
@@ -42,7 +44,8 @@ def load_model(model_name):
 
 def apply_qwen_r1_chat_template(messages, add_generation_prompt=False):
     """
-    Apply the Qwen R1 chat template to the messages. We rewrite the function to use the same template as the original one, adding the thinking process in the context. The thinking process is originally excluded for multi-turn conversations.
+    Apply the Qwen R1 chat template to the messages. We rewrite the function to use the same template as the original one, adding the thinking process in the context. 
+    The thinking process is originally excluded for multi-turn conversations.
     """
     prompt = "<｜begin▁of▁sentence｜>"
     ns = {
@@ -73,8 +76,7 @@ def apply_qwen_r1_chat_template(messages, add_generation_prompt=False):
 
     return prompt
 
-
-def get_formatted_prompt(sample, dataset_path):
+def get_formatted_prompt(sample, dataset_path, tokenizer, model_name):
     """Format prompt based on dataset type"""
     input_text = sample["input_text"]
     model_reasoning = sample["model_reasoning"]
@@ -84,15 +86,52 @@ def get_formatted_prompt(sample, dataset_path):
         print(f"model_reasoning or model_response is None, skip")
         return None
     input_text = sample["input_text"]
+
     messages = [
         {"role": "user", "content": input_text},
         {
             "role": "assistant",
-            "content": f"<think>\n{model_reasoning}\n</think>\n\n" + model_response,
+            "content": None,
         },
     ]
-    prompt = apply_qwen_r1_chat_template(messages, add_generation_prompt=False)
+    
+    if "r1" in model_name.lower():
+        messages[1]["content"] = f"<think>\n{model_reasoning}\n</think>\n\n" + model_response
+        prompt = apply_qwen_r1_chat_template(messages, add_generation_prompt=False)
+    else:
+        messages[1]["content"] = f"{model_reasoning}\n</think>\n\n" + model_response
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, enable_thinking=True)
     return prompt
+
+
+def categorize_token_types(input_ids, tokenizer):
+    """
+    Categorize tokens into INPUT_INSTRUCTION (0), REASONING (1), or RESPONSE (2)
+    
+    Args:
+        input_ids: torch tensor of token IDs
+        tokenizer: tokenizer used for encoding
+    
+    Returns:
+        List of token type categories
+    """
+    THINK_START_TOKEN = MODEL_DICT["special_tokens"]["think_start"]
+    THINK_END_TOKEN = MODEL_DICT["special_tokens"]["think_end"]
+    
+    token_types = []
+    current_type = TOKEN_TYPE.INPUT_INSTRUCTION
+    
+    for i, token_id in enumerate(input_ids[0]):
+        token_id = token_id.item()
+        
+        if token_id == THINK_START_TOKEN:
+            current_type = TOKEN_TYPE.REASONING
+        elif token_id == THINK_END_TOKEN:
+            current_type = TOKEN_TYPE.RESPONSE
+            
+        token_types.append(current_type)
+    
+    return token_types
 
 
 def process_dataset(args):
@@ -133,6 +172,7 @@ def process_dataset(args):
     all_real_tokens = []
     all_token_ids = []
     all_data_ids = []
+    all_token_types = []
 
     # Process each model
     for model_name in args.test_model_list:
@@ -149,6 +189,12 @@ def process_dataset(args):
                 weights_only=False,
             )
             all_predictions[model_size] = results_dict["predictions"]
+            # Also load common data if we haven't processed any models yet
+            if not all_real_tokens:
+                all_real_tokens.append(results_dict["real_token"])
+                all_token_ids.append(results_dict["token_id"]) 
+                all_data_ids.append(results_dict["data_id"])
+                all_token_types.append(results_dict["token_type"])
             continue
 
         # Load tokenizer for this model
@@ -164,6 +210,7 @@ def process_dataset(args):
         real_tokens_list = []
         token_ids_list = []
         data_ids_list = []
+        token_types_list = []
         all_hidden_states = []
         all_top_logits = []
         all_top_logits_indices = []
@@ -173,7 +220,7 @@ def process_dataset(args):
         with torch.no_grad():
             for data_id, sample in enumerate(dataset):
                 # Get formatted prompt
-                prompt = get_formatted_prompt(sample, args.dataset_path)
+                prompt = get_formatted_prompt(sample, args.dataset_path, tokenizer, model_name)
                 if prompt is None:
                     pbar.update(1)
                     continue
@@ -205,6 +252,10 @@ def process_dataset(args):
                 # Extract real tokens
                 real_token = input_ids[0].cpu()
 
+                # Categorize token types
+                token_types = categorize_token_types(input_ids, tokenizer)
+                token_types_tensor = torch.tensor(token_types, dtype=torch.int32).cpu()
+
                 # Extract top logits (top 100 to match small_ref)
                 top_logits, top_logits_indices = torch.topk(logits[0], 100, dim=-1)
                 # Convert to float32 to match small_ref format
@@ -219,6 +270,7 @@ def process_dataset(args):
                 real_tokens_list.append(real_token)
                 token_ids_list.append(token_id)
                 data_ids_list.append(data_id_tensor)
+                token_types_list.append(token_types_tensor)
                 all_hidden_states.append(hidden_states)
                 all_top_logits.append(top_logits)
                 all_top_logits_indices.append(top_logits_indices)
@@ -233,12 +285,14 @@ def process_dataset(args):
         real_tokens = torch.cat(real_tokens_list, dim=0)
         token_ids = torch.cat(token_ids_list, dim=0)
         data_ids = torch.cat(data_ids_list, dim=0)
+        token_types = torch.cat(token_types_list, dim=0)
 
         # Store predictions in the dictionary
         all_predictions[model_size] = predictions
         all_real_tokens.append(real_tokens)
         all_token_ids.append(token_ids)
         all_data_ids.append(data_ids)
+        all_token_types.append(token_types)
 
         # Save top logits and hidden states
         all_top_logits_tensor = torch.cat(all_top_logits, dim=0)
@@ -264,6 +318,7 @@ def process_dataset(args):
             "predictions": predictions,
             "token_id": token_ids,
             "data_id": data_ids,
+            "token_type": token_types,
             "top_logits": all_top_logits_tensor,
             "top_logits_index": all_top_logits_indices_tensor,
             "real_token": real_tokens,
@@ -278,6 +333,7 @@ def process_dataset(args):
         real_tokens = torch.cat(all_real_tokens, dim=0)
         token_ids = torch.cat(all_token_ids, dim=0)
         data_ids = torch.cat(all_data_ids, dim=0)
+        token_types = torch.cat(all_token_types, dim=0)
     else:
         # Get data from existing results files
         for model_name in args.test_model_list:
@@ -291,6 +347,7 @@ def process_dataset(args):
                 real_tokens = results_dict["real_token"]
                 token_ids = results_dict["token_id"]
                 data_ids = results_dict["data_id"]
+                token_types = results_dict["token_type"]
                 break
         else:
             print("No results files found and no models were processed.")
@@ -303,6 +360,7 @@ def process_dataset(args):
         real_tokens=real_tokens,
         token_ids=token_ids,
         data_ids=data_ids,
+        token_types=token_types,
         all_predictions=all_predictions,
         topk=args.topk,
         temperature=args.temperature,
@@ -318,6 +376,7 @@ def create_data_analysis(
     real_tokens,
     token_ids,
     data_ids,
+    token_types,
     all_predictions,
     topk=16,
     temperature=0.6,
@@ -331,6 +390,7 @@ def create_data_analysis(
             "real_token": real_tokens.numpy(),
             "token_id": token_ids.numpy(),
             "data_id": data_ids.numpy(),
+            "token_type": token_types.numpy(),
         }
     )
 

@@ -28,9 +28,11 @@ import torch
 from typing import List
 import math
 import os
+import json
 
 from r2r.data.generation_controller import DivergePoint
 from r2r.data.verify_model import VerifyModel
+from r2r.utils.model_config import MODEL_DICT
 
 def parse_args():
     parser = argparse.ArgumentParser(description='verify CSV with divergent text pairs')
@@ -131,7 +133,8 @@ def main():
         model_name=args.verify_model,
         verify_mode=args.verify_mode,
         mem_fraction_static=args.mem_fraction,
-        tp_size=args.tp_size
+        tp_size=args.tp_size,
+        apply_chat_template_kwargs=MODEL_DICT["verify"]["apply_chat_template_kwargs"]
     )
     
     # Process the data in batches

@@ -1,0 +1,42 @@
+{
+  "special_tokens": {
+    "think_start": 151667,
+    "think_end": 151668
+  },
+  "quick": {
+    "model_name": "Qwen3-0.6B",
+    "model_path": "/share/public/public_models/Qwen3-0.6B",
+    "param": "0.6",
+    "mem_fraction_static": 0.15
+  },
+  "reference": {
+    "model_name": "Qwen3-32B",
+    "model_path": "/share/public/public_models/Qwen3-32B",
+    "param": "32",
+    "mem_fraction_static": 0.80
+  },
+  "continuation_main": {
+    "model_name": "Qwen3-32B",
+    "model_path": "/share/public/public_models/Qwen3-32B",
+    "param": "32",
+    "tp_size": 2,
+    "base_gpu_id": 2,
+    "mem_fraction_static": 0.90
+  },
+  "continuation_reference": {
+    "model_name": "Qwen3-32B",
+    "model_path": "/share/public/public_models/Qwen3-32B",
+    "param": "32",
+    "tp_size": 1,
+    "base_gpu_id": 3,
+    "mem_fraction_static": 0.90
+  },
+  "verify": {
+    "model_name": "Qwen2.5-72B-Instruct",
+    "model_path": "/share/public/public_models/Qwen2.5-72B-Instruct",
+    "mem_fraction_static": 0.90,
+    "base_gpu_id": 4,
+    "tp_size": 4,
+    "apply_chat_template_kwargs": {}
+  }
+}

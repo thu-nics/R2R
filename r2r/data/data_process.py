@@ -7,6 +7,7 @@ import logging
 import json
 from tqdm import tqdm
 from transformers import AutoTokenizer
+from r2r.utils.config import TOKEN_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class DataProcessor:
                 'data_id',
                 'real_token',
                 'token_id',
+                'token_type',
                 'SLM_predictions',
                 'LLM_predictions',
             ]
@@ -84,6 +86,7 @@ class DataProcessor:
                 'data_id',
                 'real_token',
                 'token_id',
+                'token_type',
                 'SLM_predictions',
             ]
             
@@ -128,29 +131,26 @@ class DataProcessor:
         Find points where small model predictions differ from either:
         - reference model predictions (if comparison_model is 'reference')
         - real tokens (if comparison_model is 'real')
-        Only considers tokens after the instruction end token (151648)
+        Only considers tokens that are reasoning (1) or response (2) tokens
         """
         # Group by data_id first to handle the instruction boundary
         grouped_data = self.data.groupby('data_id')
         
         mismatches = []
-        for data_id, data_item in grouped_data:
+        for data_id, data_item in tqdm(grouped_data, desc="Finding mismatches"):
             try:
                 # Check if data item length exceeds max_tokens
                 if len(data_item) > self.max_tokens:
                     logger.warning(f"Skipping data item {data_id} as it exceeds max token length ({len(data_item)} > {self.max_tokens})")
                     continue
                     
-                # Find the last occurrence of token 151648 in this data item
-                instruction_end_mask = data_item['real_token'].astype(int) == 151648
-                if not instruction_end_mask.any():
-                    logger.warning(f"No instruction end token <think> (151648) found in data item {data_id}")
-                    continue
-                    
-                last_instruction_idx = instruction_end_mask.iloc[::-1].idxmax()
+                # find first non-instruction token (10x faster than pandas)
+                first_reasoning_idx = np.argmax(data_item['token_type'].values > TOKEN_TYPE.INPUT_INSTRUCTION)
+                valid_rows = data_item.iloc[first_reasoning_idx:]
                 
-                # Only look at rows after the last instruction token
-                valid_rows = data_item.loc[last_instruction_idx + 1:]
+                if len(valid_rows) == 0:
+                    logger.warning(f"No reasoning or response tokens found in data item {data_id}")
+                    continue
                 
                 # Reset index to make shifting easier
                 valid_rows = valid_rows.reset_index(drop=True)

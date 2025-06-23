@@ -107,6 +107,7 @@ def parse_args():
         default="output",
         help="Base directory to save results",
     )
+
     parser.add_argument(
         "--is_print",
         action="store_true",
@@ -233,7 +234,7 @@ def initialize_sglang_engine(
 
     return engine, tokenizer
 
-def prepare_prompts(items, tokenizer):
+def prepare_prompts(items, tokenizer, enable_thinking=True):
     """Prepare prompts for batch inference using the tokenizer's chat template.
     
     The input items are expected to be in the unified format created by step_-1_dataset_conversion.py.
@@ -256,7 +257,8 @@ def prepare_prompts(items, tokenizer):
             formatted_prompt = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
-                add_generation_prompt=True
+                add_generation_prompt=True,
+                enable_thinking=enable_thinking,
             )
             
             prompts.append(formatted_prompt)
@@ -278,7 +280,9 @@ def batch_generate(engine, tokenizer, prompts, max_new_tokens=8192, temperature=
     input_ids_list = [tokenizer.encode(prompt) for prompt in prompts]
 
     # Set sampling parameters
-    sampling_params = {"max_new_tokens": max_new_tokens, "temperature": temperature}
+    sampling_params = {"max_new_tokens": max_new_tokens}
+    if temperature >= 0.0:
+        sampling_params["temperature"] = temperature
 
     # Generate responses in batch
     outputs = engine.generate(input_ids=input_ids_list, sampling_params=sampling_params)
