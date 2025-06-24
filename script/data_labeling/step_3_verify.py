@@ -32,7 +32,7 @@ import json
 
 from r2r.data.generation_controller import DivergePoint
 from r2r.data.verify_model import VerifyModel
-from r2r.utils.model_config import MODEL_DICT
+from r2r.utils.config import MODEL_DICT
 
 def parse_args():
     parser = argparse.ArgumentParser(description='verify CSV with divergent text pairs')
@@ -41,7 +41,6 @@ def parse_args():
                         help='Path to output CSV file')
     parser.add_argument('--batch_size', type=int, default=64, 
                         help='Batch size for processing')
-    parser.add_argument('--verify_model', type=str, default='Qwen/Qwen2.5-72B-Instruct', help='Verify model to use')
     parser.add_argument('--verify_mode', type=str, default='common_context',
                         choices=['common_context'],
                         help='Judgment mode to use for evaluation')
@@ -128,13 +127,14 @@ def main():
         raise ValueError(f"CSV is missing required columns: {missing_columns}")
     
     # Initialize the verify model
-    print(f"Initializing verify model: {args.verify_model}")
+    print(f"Initializing verify model: {MODEL_DICT['verify']['model_path']}")
     verify_model = VerifyModel(
-        model_name=args.verify_model,
+        model_name=MODEL_DICT["verify"]["model_path"],
         verify_mode=args.verify_mode,
+        max_new_tokens=MODEL_DICT["verify"]["max_new_tokens"],
         mem_fraction_static=args.mem_fraction,
         tp_size=args.tp_size,
-        apply_chat_template_kwargs=MODEL_DICT["verify"]["apply_chat_template_kwargs"]
+        apply_chat_template_kwargs=getattr(MODEL_DICT["verify"], "apply_chat_template_kwargs", None)
     )
     
     # Process the data in batches

@@ -312,17 +312,7 @@ Sentence 2:
                 response = self.tokenizer.decode(output_token_ids, skip_special_tokens=True)
 
                 # Extract score from response
-                try:
-                    match = re.search(r'(?i)\boutput\b[^0-9]*?(\d+)', response)
-                    score = int(match.group(1)) if match else -1
-
-                    # For divergent mode, only accept 0 or 1
-                    if self.verify_mode == "divergent" and score not in [0, 1]:
-                        print(f"Warning: Unexpected score {score} in divergent mode. Setting to -1.")
-                        score = -1
-                except Exception as e:
-                    print(f"Error parsing response: {e}")
-                    score = -1
+                score = self._response_to_score(response, self.verify_mode)
 
                 # Create comparison point
                 comparison_point = ComparisonPoint(
@@ -359,6 +349,24 @@ Sentence 2:
                 ))
 
         return comparison_points
+
+    def _response_to_score(self, response: str, verify_mode: str) -> int:
+        """Convert the response to a score"""
+        # Try the more specific pattern first (looking for "output" followed by digits)
+        match = re.search(r'(?i)\boutput\b[^0-9]*?(\d+)', response)
+        if match:
+            score = int(match.group(1))
+        else:
+            # Fall back to simple digit extraction
+            match = re.search(r'\d+', response)
+            score = int(match.group()) if match else -1
+        
+        # For divergent mode, only accept 0 or 1
+        if self.verify_mode == "divergent" and score not in [0, 1]:
+            print(f"Warning: Unexpected score {score} in divergent mode. Setting to -1.")
+            score = -1
+            
+        return score
 
     def shutdown(self):
         """Shut down the Engine instance to free resources"""
