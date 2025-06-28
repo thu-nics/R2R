@@ -326,9 +326,14 @@ class ModelController:
                         generated_tokens = generated_tokens[:i+1]
                         break
 
-        # Remove the last EOS token if it exists
-        if generated_tokens[-1] == self.tokenizer.eos_token_id:
-            generated_tokens = generated_tokens[:-1]
+        # Handle the case where generated_tokens is empty (at end of sequence)
+        if not generated_tokens:
+            # If we're at the end of the sequence, set generated_tokens to contain the EOS token
+            generated_tokens = [self.tokenizer.eos_token_id]
+        else:
+            # Remove the last EOS token if it exists
+            if generated_tokens[-1] == self.tokenizer.eos_token_id:
+                generated_tokens = generated_tokens[:-1]
 
         # Decode the tokens to text for compatibility
         generated_text = self.tokenizer.decode(generated_tokens)

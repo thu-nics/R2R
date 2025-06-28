@@ -32,7 +32,7 @@ import json
 
 from r2r.data.generation_controller import DivergePoint
 from r2r.data.verify_model import VerifyModel
-from r2r.utils.model_config import MODEL_DICT
+from r2r.utils.config import MODEL_DICT
 
 def parse_args():
     parser = argparse.ArgumentParser(description='verify CSV with divergent text pairs')
