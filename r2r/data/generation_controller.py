@@ -112,6 +112,8 @@ class ModelController:
         with open(eos_tokens_config_path, 'r') as f:
             eos_tokens_config = json.load(f)
             self.eos_token_ids = [int(key) for key in eos_tokens_config["semantic_tokens_mapping"].keys()]
+            self.eos_token_ids.append(eos_tokens_config["special_tokens"]["think_start"])
+            self.eos_token_ids.append(eos_tokens_config["special_tokens"]["think_end"])
             
         # self.eos_token_ids = [
         #     151648, # <think>
