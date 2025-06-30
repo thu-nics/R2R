@@ -7,7 +7,7 @@ import logging
 import json
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from r2r.utils.config import TOKEN_TYPE
+from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +55,18 @@ class DataProcessor:
         self.comparison_model = comparison_model
         self.is_multi_pred = is_multi_pred
 
-        self.eos_token = 151643
+        self.eos_token = MODEL_DICT["special_tokens"]['think_end']
 
         self._validate_columns()
         self.data_contexts = {}  # cache for data contexts
         # Initialize both tokenizers
-        self.tokenizer_small = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+        small_model_path = MODEL_DICT["quick"]['model_path']
+        reference_model_path = MODEL_DICT["reference"]['model_path']
+        self.tokenizer_small = AutoTokenizer.from_pretrained(small_model_path)
         if self.comparison_model == 'reference':
-            self.tokenizer_reference = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
+            self.tokenizer_reference = AutoTokenizer.from_pretrained(reference_model_path)
         else:
-            self.tokenizer_reference = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+            self.tokenizer_reference = AutoTokenizer.from_pretrained(small_model_path)
         
         logger.info(f"DataProcessor initialized with comparison_model: {comparison_model}")
 

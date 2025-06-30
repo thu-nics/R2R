@@ -5,6 +5,7 @@ from torch import Tensor
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
+import json
 import numpy as np
 from dataclasses import dataclass
 from itertools import chain
@@ -16,7 +17,7 @@ from r2r.utils.config import MODEL_DICT
 import sglang as sgl
 from sglang.srt.hf_transformers_utils import get_tokenizer
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
-
+from r2r.data.utils.convert_eos_tokens import save_semantic_tokens_config
 from r2r.data.data_process import MismatchPoint
 
 # Add the parent directory to Python path before any other imports
@@ -100,17 +101,32 @@ class ModelController:
                 )
 
         # Custom EOS tokens - keep the same logic for tracking EOS tokens
-        self.eos_token_ids = [
-            151648, # <think>
-            151649, # </think>
-            151643, # 
-            4710, # '\n\n
-            18611,15514,6320,83900,70191,94521,24796,32057,53589,50524,52324,33933,45806,2146,44364,26469, # ??\n\n
-            271, 2219, 1837, 26487, 66426, 15441, 3876, 44611, 692, 21518, 41025, 3554, 10452, 382, 8680, 1447, 401, 68327, 1339, 1939, 19347, 2533, 18797, 19324, 4257, 43738, 630, 58629, 60543, 78988,75048,3407,26850,17701, # ?\n\n
-            198, 4894, 698, 4956, 25046, 13744, 1248, 1006, 340, 5618, 16930, 345, 6913, 624, 5894, 510, 280, 14750, 397, 5267, 62799, 921, 12924, 3989, 515, 7360, 532, 88141,8997,41453,94432, # ?\n
-            22614,33947,50347,7129,89262,11248,5661,14288,39071,79295,5929,1171,1019,33084,51377,84274,10952,7088, #??\n
-            13,1773,6313,11319,30,1112 # end of data item
-        ]
+        eos_tokens_config_path = os.path.join(os.path.dirname(__file__), 'eos_tokens_config.json')
+        if not os.path.exists(eos_tokens_config_path):
+            tokenizer = AutoTokenizer.from_pretrained(small_model_path)
+            save_semantic_tokens_config(tokenizer, eos_tokens_config_path)
+            print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
+        else:
+            print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
+            
+        with open(eos_tokens_config_path, 'r') as f:
+            eos_tokens_config = json.load(f)
+            self.eos_token_ids = [int(key) for key in eos_tokens_config["semantic_tokens_mapping"].keys()]
+            self.eos_token_ids.append(eos_tokens_config["special_tokens"]["think_start"])
+            self.eos_token_ids.append(eos_tokens_config["special_tokens"]["think_end"])
+            
+        # self.eos_token_ids = [
+        #     151648, # <think>
+        #     151649, # </think>
+        #     151643, # 
+        #     4710, # '\n\n
+        #     18611,15514,6320,83900,70191,94521,24796,32057,53589,50524,52324,33933,45806,2146,44364,26469, # ??\n\n
+        #     271, 2219, 1837, 26487, 66426, 15441, 3876, 44611, 692, 21518, 41025, 3554, 10452, 382, 8680, 1447, 401, 68327, 1339, 1939, 19347, 2533, 18797, 19324, 4257, 43738, 630, 58629, 60543, 78988,75048,3407,26850,17701, # ?\n\n
+        #     198, 4894, 698, 4956, 25046, 13744, 1248, 1006, 340, 5618, 16930, 345, 6913, 624, 5894, 510, 280, 14750, 397, 5267, 62799, 921, 12924, 3989, 515, 7360, 532, 88141,8997,41453,94432, # ?\n
+        #     22614,33947,50347,7129,89262,11248,5661,14288,39071,79295,5929,1171,1019,33084,51377,84274,10952,7088, #??\n
+        #     13,1773,6313,11319,30,1112 # end of data item
+        # ]
+        
         self.eos_tokens = [
             self.tokenizer.decode([token_id]) for token_id in self.eos_token_ids
         ]
