@@ -41,7 +41,7 @@ def parse_args():
                         help='Path to output CSV file')
     parser.add_argument('--batch_size', type=int, default=64, 
                         help='Batch size for processing')
-    parser.add_argument('--verify_model', type=str, default='Qwen/Qwen2.5-72B-Instruct', help='Verify model to use')
+    parser.add_argument('--verify_model', type=str, default=None, help='Verify model to use. If not provided, will use the model specified in r2r/utils/config.py')
     parser.add_argument('--verify_mode', type=str, default='common_context',
                         choices=['common_context'],
                         help='Judgment mode to use for evaluation')
@@ -128,7 +128,7 @@ def main():
         raise ValueError(f"CSV is missing required columns: {missing_columns}")
     
     # Initialize the verify model
-    print(f"Initializing verify model: {args.verify_model}")
+    print(f"Initializing verify model: {args.verify_model or MODEL_DICT['verify']['model_path']}")
     verify_model = VerifyModel(
         model_name=args.verify_model,
         verify_mode=args.verify_mode,

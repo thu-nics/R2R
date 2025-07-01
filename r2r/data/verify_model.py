@@ -11,6 +11,7 @@ import os
 
 from r2r.data.data_process import MismatchPoint
 from r2r.data.generation_controller import DivergePoint, ModelController
+from r2r.utils.config import MODEL_DICT
 
 DIVERGENT_SIMPLE_SYSTEM_PROMPT = "You are a semantic comparison expert."
 
@@ -43,7 +44,7 @@ class ComparisonPoint:
 class VerifyModel:
     """Model for judging the similarity between two text continuations"""
 
-    def __init__(self, device="cuda", dtype=torch.bfloat16, model_name="Qwen/Qwen2.5-1.5B-Instruct", verify_mode="divergent", max_new_tokens=128, mem_fraction_static=0.5, tp_size=2, base_gpu_id=0, apply_chat_template_kwargs=None):
+    def __init__(self, device="cuda", dtype=torch.bfloat16, model_name=None, verify_mode="divergent", max_new_tokens=128, mem_fraction_static=0.5, tp_size=2, base_gpu_id=0, apply_chat_template_kwargs=None):
         self.device = device
         self.model_name = model_name
         self.verify_mode = verify_mode
