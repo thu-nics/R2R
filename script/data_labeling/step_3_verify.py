@@ -128,13 +128,13 @@ def main():
         raise ValueError(f"CSV is missing required columns: {missing_columns}")
     
     # Initialize the verify model
-    print(f"Initializing verify model: {args.verify_model or MODEL_DICT['verify']['model_path']}")
     verify_model = VerifyModel(
-        model_name=args.verify_model,
+        model_name=MODEL_DICT["verify"]["model_path"],
         verify_mode=args.verify_mode,
+        max_new_tokens=MODEL_DICT["verify"]["max_new_tokens"],
         mem_fraction_static=args.mem_fraction,
         tp_size=args.tp_size,
-        apply_chat_template_kwargs=MODEL_DICT["verify"]["apply_chat_template_kwargs"]
+        apply_chat_template_kwargs=getattr(MODEL_DICT["verify"], "apply_chat_template_kwargs", None)
     )
     
     # Process the data in batches

@@ -9,16 +9,16 @@ Core Functionality:
 1. Loads verification scores, SLM outputs, and an overall token index.
 2. Filters data by specified `data_id` and `token_id` ranges if provided.
 3. Aligns verification scores with SLM data, adjusting `token_id`s and handling missing scores.
-4. Removes initial "instruction" tokens based on a "think token" (ID 151648).
+4. Removes initial "instruction" tokens based on token_type column (token_type == 0).
 5. Filters data to include only `data_id`s present in the verification scores.
 6. Constructs and saves a HuggingFace `Dataset` containing token-level features:
    `token_id`, `data_id`, verification score, SLM token, real token, SLM logits,
-   SLM logit indices, SLM hidden states, and a divergence indicator.
+   SLM logit indices, SLM hidden states, and a divergence indicator. Note that real_token is the input token, others are all corresponding output tokens, thus the i-th real token commonly equals to the (i-1)-th small_token. Real token is only added for reference
 7. Saves a 'scalar.csv' with non-tensor data for easy inspection.
 
 Inputs:
 - `--csv`: Verification scores CSV from Step 3 (e.g., "verification_results.csv").
-- `prediction_comparison.csv`: Index file with `SLM_predictions`, `real_token`, etc.
+- `prediction_comparison.csv`: Index file with `SLM_predictions`, `real_token`, `token_type`, etc.
 - `SLM_top_logits.pt`, `SLM_top_logits_indices.pt`, `SLM_hidden_states.pt`: SLM output tensors.
 - `--output_sub_folder`: Where to save the dataset.
 - `--divergent_column_name`: Column in Step 3 CSV with verification scores.
@@ -36,6 +36,8 @@ from datasets import Dataset, Features, Value, Sequence, Array2D, concatenate_da
 from tqdm import tqdm
 import numpy as np
 import argparse
+
+from r2r.utils.config import TOKEN_TYPE
 
 parser = argparse.ArgumentParser(description='Prepare dataset for model comparison analysis')
 
@@ -208,30 +210,26 @@ def align_data(divergent_df, data_index_df):
     # Convert to numeric again after merge to ensure proper type
     merged_df[divergent_column_name] = pd.to_numeric(merged_df[divergent_column_name], errors='coerce')
     
-    think_token_location = torch.where(torch.Tensor(merged_df['real_token'] == 151648))
-    data_id_start = torch.where(torch.Tensor(merged_df['token_id'] == 0))
-    if len(think_token_location[0]) != len(data_id_start[0]):
-        raise ValueError("think_token_location and data_id_start have different lengths")
+    # Use token_type column to identify instruction tokens instead of think token
+    # token_type == 0 corresponds to INPUT_INSTRUCTION tokens
+    if 'token_type' not in merged_df.columns:
+        raise ValueError("token_type column not found in data. Make sure Step 1 was run with the latest version that includes token_type.")
     
-    instruction_end_mask = torch.zeros(len(merged_df))
-    for i in range(len(data_id_start[0])):
-        # iterate think_token_location to find the minimum value greater than data_id_start[0][i]
-        think_token_location_next = 0
-        for j in range(len(think_token_location[0])):
-            if think_token_location[0][j] > data_id_start[0][i]:
-                think_token_location_next = think_token_location[0][j]
-                break
-        if think_token_location_next == 0:
-            raise ValueError("think_token_location_next is 0")
+    # Create mask directly from token_type: 0 for instruction tokens, 1 for non-instruction tokens
+    valid_mask = (merged_df['token_type'] != TOKEN_TYPE.INPUT_INSTRUCTION).astype(int)
+    
+    # Create mask column: 0 for instruction tokens, 1 for non-instruction tokens (reasoning + response)
+    merged_df['mask'] = valid_mask
+    
+    print(f"Instruction tokens (mask=0): {(merged_df['mask'] == 0).sum()}")
+    print(f"Non-instruction tokens (mask=1): {(merged_df['mask'] == 1).sum()}")
 
-        instruction_end_mask[data_id_start[0][i]:think_token_location_next] = 1
-
-    # Create mask column: 0 for question tokens (instruction), 1 for answer tokens
-    merged_df['mask'] = (1 - instruction_end_mask).int().numpy()
+    # if len(think_token_location[0]) != len(data_id_start[0]):
+    #     raise ValueError("think_token_location and data_id_start have different lengths")
 
     print(f"original data length: {len(merged_df)}")
 
-    return merged_df, instruction_end_mask
+    return merged_df, valid_mask
 
 def create_dataset(batch_size=100000):
     """
@@ -262,10 +260,7 @@ def create_dataset(batch_size=100000):
     print(f"Filtered data from {len(data_index_df)} to {len(filtered_data_index_df)} rows")
     
     # Align data using filtered_data_index_df as base
-    aligned_df, instruction_end_mask = align_data(divergent_df, filtered_data_index_df)
-    
-    # No longer filter out question tokens; create mask from instruction_end_mask
-    mask = (1 - instruction_end_mask).int()
+    aligned_df, mask = align_data(divergent_df, filtered_data_index_df)
 
     # Define features for the dataset
 
