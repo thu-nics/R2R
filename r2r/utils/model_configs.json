@@ -1,31 +1,31 @@
 {
   "special_tokens": {
-    "think_start": 151667,
-    "think_end": 151668
+    "think_start": 151648,
+    "think_end": 151649
   },
   "quick": {
-    "model_name": "Qwen3-0.6B",
-    "model_path": "/share/public/public_models/Qwen3-0.6B",
-    "param": "0.6",
+    "model_name": "DeepSeek-R1-Distill-Qwen-1.5B",
+    "model_path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-1.5B",
+    "param": "1.5",
     "mem_fraction_static": 0.15
   },
   "reference": {
-    "model_name": "Qwen3-32B",
-    "model_path": "/share/public/public_models/Qwen3-32B",
+    "model_name": "DeepSeek-R1-Distill-Qwen-32B",
+    "model_path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-32B",
     "param": "32",
     "mem_fraction_static": 0.80
   },
   "continuation_main": {
-    "model_name": "Qwen3-32B",
-    "model_path": "/share/public/public_models/Qwen3-32B",
+    "model_name": "DeepSeek-R1-Distill-Qwen-32B",
+    "model_path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-32B",
     "param": "32",
     "tp_size": 2,
     "base_gpu_id": 2,
     "mem_fraction_static": 0.90
   },
   "continuation_reference": {
-    "model_name": "Qwen3-32B",
-    "model_path": "/share/public/public_models/Qwen3-32B",
+    "model_name": "DeepSeek-R1-Distill-Qwen-32B",
+    "model_path": "/share/public/public_models/DeepSeek-R1-Distill-Qwen-32B",
     "param": "32",
     "tp_size": 1,
     "base_gpu_id": 3,

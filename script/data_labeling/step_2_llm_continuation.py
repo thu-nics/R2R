@@ -54,6 +54,8 @@ def parse_args():
                         help='Temperature for sampling. Higher values produce more random samples.')
     parser.add_argument('--top_p', type=float, default=1.0,
                         help='Top-p probability threshold for nucleus sampling (0 < top_p ≤ 1)')
+    parser.add_argument('--top_k', type=int, default=-1,
+                        help='Top-k sampling parameter for generation')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Number of mismatches to batch together for generation')
     parser.add_argument('--skip_stress_divergent_token', action='store_true', default=False,
@@ -165,6 +167,7 @@ def main():
                 temperature=args.temperature,
                 num_samples=args.num_samples,
                 top_p=args.top_p,
+                top_k=args.top_k,
                 num_continuation=args.num_continuation + 1
             )
             
