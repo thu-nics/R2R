@@ -24,6 +24,7 @@ import glob
 import numpy as np
 
 from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
+from r2r.utils.sampling import sample_token
 
 def load_model(model_name):
     """Load a model with basic error handling"""
@@ -241,57 +242,9 @@ def process_dataset(args):
                 # Run inference with output_hidden_states=True
                 outputs = model(input_ids, output_hidden_states=True)
                 logits = outputs.logits
-
-                # Extract predictions
-                # Check if we should use greedy sampling (temperature=0 or top_p=1)
-                if args.temperature == 0 or args.top_p == 1.0:
-                    # Greedy sampling: take the token with highest probability
-                    pred = logits[0].argmax(dim=-1).cpu()
-                else:
-                    # Sampling with temperature and top_p
-                    # Apply temperature to logits
-                    logits_with_temp = logits[0] / args.temperature
-                    
-                    # Convert to probabilities
-                    probs = torch.nn.functional.softmax(logits_with_temp, dim=-1).cpu()
-                    
-                    # Apply top-p filtering
-                    sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True)
-                    cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
-                    
-                    # Create mask for top-p
-                    mask = cumsum_probs <= args.top_p
-                    mask[:, 0] = True  # Ensure the top token is always included
-                    
-                    # Apply top-k filtering
-                    k_mask = torch.arange(sorted_probs.shape[-1], device=sorted_probs.device) < args.top_k
-                    mask = mask & k_mask.unsqueeze(0)  # Broadcast k_mask to match mask shape
-                    
-                    # Apply mask to get filtered probabilities and indices
-                    filtered_probs = sorted_probs * mask.float()
-                    filtered_indices = sorted_indices * mask.long()
-                    
-                    # Sample from the filtered distribution
-                    # For each position, sample one token from the filtered distribution
-                    pred = torch.zeros(logits[0].shape[0], dtype=torch.long, device=logits[0].device)
-                    for i in range(logits[0].shape[0]):
-                        # Get non-zero probabilities and their corresponding indices
-                        non_zero_mask = filtered_probs[i] > 0
-                        if non_zero_mask.sum() > 0:
-                            valid_probs = filtered_probs[i][non_zero_mask]
-                            valid_indices = filtered_indices[i][non_zero_mask]
-                            
-                            # Normalize probabilities
-                            valid_probs = valid_probs / valid_probs.sum()
-                            
-                            # Sample one token
-                            sampled_idx = torch.multinomial(valid_probs, 1)
-                            pred[i] = valid_indices[sampled_idx]
-                        else:
-                            # Fallback to greedy if no valid tokens
-                            pred[i] = logits[0][i].argmax()
-                    
-                    pred = pred.cpu()
+                
+                pred = sample_token(logits[0], temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
+                pred = pred.cpu()
 
                 # Extract token IDs and data IDs
                 token_id = torch.arange(0, input_ids.shape[-1], 1).cpu()
@@ -426,7 +379,7 @@ def create_data_analysis(
     data_ids,
     token_types,
     all_predictions,
-    top_k=16,
+    top_k=-1,
     temperature=0.6,
     top_p=1.0,
 ):
@@ -490,8 +443,11 @@ def create_data_analysis(
                 filtered_indices_in_sorted = row_indices_in_sorted[row_mask]
 
                 # Limit by top_k
-                k = min(top_k, len(filtered_indices_in_sorted))
-                final_indices_in_sorted = filtered_indices_in_sorted[:k]
+                if top_k != -1:
+                    k = min(top_k, len(filtered_indices_in_sorted))
+                    final_indices_in_sorted = filtered_indices_in_sorted[:k]
+                else:
+                    final_indices_in_sorted = filtered_indices_in_sorted
 
                 # Map these indices back to the original token IDs using the loaded top_indices
                 final_token_ids = row_top_indices[final_indices_in_sorted]
@@ -541,8 +497,8 @@ def main():
     parser.add_argument(
         "--top_k",
         type=int,
-        default=1,
-        help="Number of top predictions to include in the output",
+        default=-1,
+        help="Number of top predictions to include in the output. If -1, no top-k filtering is applied.",
     )
     parser.add_argument(
         "--temperature",
