@@ -219,15 +219,16 @@ class ModelBenchmark:
 
     def _prepare_batch_inputs(self, prompts, tokenizer):
         """Helper to convert text prompts to token ids for batch generation."""
-        batch_input_tokens = []
-        for prompt in prompts:
-            current_turn_messages = [{"role": "user", "content": prompt}]
-            prompt_text = tokenizer.apply_chat_template(
-                current_turn_messages,
+        current_turn_messages_list = [{"role": "user", "content": prompt} for prompt in prompts]
+        prompt_texts = [
+            tokenizer.apply_chat_template(
+                [current_turn_messages],
                 tokenize=False,
                 add_generation_prompt=True
             )
-            batch_input_tokens.append(tokenizer.encode(prompt_text))
+            for current_turn_messages in current_turn_messages_list
+        ]
+        batch_input_tokens = tokenizer.batch_encode_plus(prompt_texts, return_tensors=None)["input_ids"]
         return batch_input_tokens
 
     def evaluate(self, model_type: str, use_batch: bool):
