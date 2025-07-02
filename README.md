@@ -17,6 +17,10 @@ By combining DeepSeek's R1-1.5B and R1-32B models, R2R-5.6B achieves a 2.8× spe
 }
 ```
 
+## 📰 News
+
+* [2025/06] Support Qwen3 model family and sampling.
+
 ## 🔗 Interactive Demo
 
 Check out our interactive demo and see R2R in action by visiting our [project page](https://fuvty.github.io/R2R_Project_Page/).
