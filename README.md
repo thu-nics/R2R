@@ -149,6 +149,8 @@ Add `--use_wandb` to track training progress with Weights & Biases.
 
 The training script accepts the config file that specifies model architecture, dataset paths, training parameters, and threshold criteria. Modify it if you wish to alter the training process.
 
+>We also provide a recipe for the Qwen3 series. To use it, simply replace r2r/utils/model_configs.json with model_configs_Qwen3_series.json, and update args.test_model_list to use the corresponding small model as described in Step 1.
+
 ## 🙌 Happy to help
 
 If you have questions about any aspect of R2R, please open an issue. We're happy to help and discuss!

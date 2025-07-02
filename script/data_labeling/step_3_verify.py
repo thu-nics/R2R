@@ -127,7 +127,6 @@ def main():
         raise ValueError(f"CSV is missing required columns: {missing_columns}")
     
     # Initialize the verify model
-    print(f"Initializing verify model: {MODEL_DICT['verify']['model_path']}")
     verify_model = VerifyModel(
         model_name=MODEL_DICT["verify"]["model_path"],
         verify_mode=args.verify_mode,

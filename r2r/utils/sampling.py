@@ -2,12 +2,13 @@ import torch
 import torch.nn.functional as F
 from typing import Union
 
-def sample_token(logits: torch.Tensor, temperature: float = 1.0, top_p: float = 1.0) -> Union[int, torch.Tensor]:
-    """Sample a token from logits using temperature and top-p sampling.
+def sample_token(logits: torch.Tensor, temperature: float = 1.0, top_p: float = 1.0, top_k: int = -1) -> Union[int, torch.Tensor]:
+    """Sample a token from logits using temperature, top-p, and top-k sampling.
     Args:
         logits: Token logits of shape [vocab_size] or [batch_size, vocab_size]
         temperature: Temperature for sampling (>0). Higher values produce more random samples.
         top_p: Top-p probability threshold for nucleus sampling (0 < top_p ≤ 1)
+        top_k: Top-k threshold for sampling (if -1, no top-k filtering is applied)
     Returns:
         Sampled token ID (int for single sample, tensor for batch)
     """
@@ -31,6 +32,21 @@ def sample_token(logits: torch.Tensor, temperature: float = 1.0, top_p: float = 
     
     # Convert to probabilities
     probs = torch.nn.functional.softmax(logits / temperature, dim=-1)
+    
+    # Apply top-k filtering first (if specified)
+    if top_k != -1:
+        # Get top-k values and indices
+        top_k_values, top_k_indices = torch.topk(probs, k=min(top_k, probs.shape[-1]), dim=-1)
+        
+        # Create a mask to zero out non-top-k probabilities
+        mask = torch.zeros_like(probs, dtype=torch.bool)
+        mask.scatter_(-1, top_k_indices, True)
+        
+        # Zero out non-top-k probabilities
+        probs = probs * mask.float()
+        
+        # Renormalize probabilities
+        probs = probs / probs.sum(dim=-1, keepdim=True)
     
     # Apply top-p (nucleus) sampling
     if top_p < 1.0:

@@ -102,6 +102,9 @@ def parse_args():
     parser.add_argument(
         "--top_p", type=float, default=1.0, help="Top-p sampling parameter for generation"
     )
+    parser.add_argument(
+        "--top_k", type=int, default=-1, help="Top-k sampling parameter for generation"
+    )
 
     # Output configuration
     parser.add_argument(
@@ -274,7 +277,7 @@ def prepare_prompts(items, tokenizer, enable_thinking=True):
     return prompts, item_ids
 
 
-def batch_generate(engine, tokenizer, prompts, max_new_tokens=8192, temperature=0.0, top_p=1.0):
+def batch_generate(engine, tokenizer, prompts, max_new_tokens=8192, temperature=0.0, top_p=1.0, top_k=-1):
     """Generate text from multiple prompts in a batch."""
     if not prompts:
         return []
@@ -288,6 +291,8 @@ def batch_generate(engine, tokenizer, prompts, max_new_tokens=8192, temperature=
         sampling_params["temperature"] = temperature
     if top_p < 1.0:
         sampling_params["top_p"] = top_p
+    if top_k != -1:
+        sampling_params["top_k"] = top_k
 
     # Generate responses in batch
     outputs = engine.generate(input_ids=input_ids_list, sampling_params=sampling_params)
@@ -449,6 +454,7 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
+                top_k=args.top_k,
             )
 
             # Process the responses
