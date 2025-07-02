@@ -1,7 +1,6 @@
 import os
 os.environ['MASTER_ADDR'] = 'localhost'
 os.environ['MASTER_PORT'] = '29500'
-import sys
 import time
 import argparse
 import torch
@@ -12,12 +11,6 @@ import warnings
 import json
 import statistics
 from datetime import datetime
-
-# Add the root directory to Python path for imports
-# script_dir = os.path.dirname(os.path.abspath(__file__))
-# root_dir = os.path.dirname(os.path.dirname(script_dir))
-# sys.path.insert(0, root_dir)
-
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 from r2r.utils.config import (
     QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM,
@@ -165,231 +158,301 @@ class ModelBenchmark:
         self.batch_prompts = get_diverse_test_prompts(args.batch_size) if args.test_batch else []
         self.results = {}
         
-    def run_slm_benchmark(self):
-        """Benchmark Small Language Model (1.5B)"""
-        print(f"\n{QUICK_COLOR}=== Benchmarking SLM (1.5B) ==={RESET}")
-        
-        model_path = MODEL_DICT['quick']['model_path']
-        
-        try:
-            llm_engine = sgl.Engine(
-                model_path=model_path,
-                tp_size=1,
-                skip_tokenizer_init=True,
-                dtype="bfloat16"
-            )
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-        except Exception as e:
-            print(f"Failed to initialize SLM: {e}")
-            return None
-            
-        results = []
-        
-        for i, prompt in enumerate(self.test_prompts):
-            print(f"Testing prompt {i+1}/{len(self.test_prompts)}: {prompt[:50]}...")
-            
+    def _init_model(self, model_type: str):
+        """Initialise the underlying generation engine / tokenizer according to model_type.
+
+        Returns
+        -------
+        engine : The generation object (sgl.Engine or DynamicSimpleSGLangSelector)
+        tokenizer : Tokenizer corresponding to the model
+        is_r2r : bool, whether the returned engine is an R2R selector
+        """
+        model_type = model_type.lower()
+        if model_type == "slm" or model_type == "llm":
+            if model_type == "slm":
+                model_path = MODEL_DICT['quick']['model_path']
+                curr_tp_size = 1
+            else:
+                model_path = MODEL_DICT['reference']['model_path']
+                curr_tp_size = self.args.tp_size
+            try:
+                engine = sgl.Engine(
+                    model_path=model_path,
+                    tp_size=curr_tp_size,
+                    skip_tokenizer_init=True,
+                    dtype="bfloat16"
+                )
+                tokenizer = AutoTokenizer.from_pretrained(model_path)
+            except Exception as e:
+                print(f"Failed to initialise SLM/LLM: {e}")
+                return None, None, False
+            return engine, tokenizer, False
+        elif model_type == "r2r":
+            if not self.args.router_path:
+                print("Error: --router_path must be provided for R2R model type")
+                return None, None, True
+
+            strategy_kwargs = {'model_path': self.args.router_path}
+            if self.args.neural_threshold:
+                strategy_kwargs['threshold'] = self.args.neural_threshold
+
+            sglang_kwargs = {
+                "dtype": "bfloat16",
+                "tp_size": self.args.tp_size
+            }
+            try:
+                engine = DynamicSimpleSGLangSelector(
+                    device="cuda",
+                    dtype=torch.bfloat16,
+                    switching_strategy='neural',
+                    strategy_kwargs=strategy_kwargs,
+                    is_record=True,
+                    sglang_kwargs=sglang_kwargs
+                )
+                tokenizer = engine.tokenizer
+            except Exception as e:
+                print(f"Failed to initialise R2R generator: {e}")
+                return None, None, True
+            return engine, tokenizer, True
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+
+    def _prepare_batch_inputs(self, prompts, tokenizer):
+        """Helper to convert text prompts to token ids for batch generation."""
+        batch_input_tokens = []
+        for prompt in prompts:
             current_turn_messages = [{"role": "user", "content": prompt}]
             prompt_text = tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
+                current_turn_messages,
+                tokenize=False,
                 add_generation_prompt=True
             )
-            input_tokens = [tokenizer.encode(prompt_text)]
-            
-            sampling_params_dict = {
-                "temperature": self.args.temperature,
-                "top_p": self.args.top_p,
-                "max_new_tokens": self.args.max_new_tokens,
-            }
-            sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
-            
-            full_generated_text = ""
-            
-            with PerformanceTimer() as timer:
-                generated_stream = llm_engine.generate(
-                    input_ids=input_tokens, 
-                    sampling_params=sampling_params_dict,
-                    stream=True
-                )
-                
-                for output_item in generated_stream:
-                    output_text = tokenizer.decode(output_item['output_ids'][-1:], skip_special_tokens=True)
-                    full_generated_text += output_text
-            
-            elapsed_time_s = timer.get_elapsed_time()
-            num_output_tokens = len(tokenizer.encode(full_generated_text))
-            tokens_per_second = num_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-            
-            results.append({
-                'prompt': prompt,
-                'output_tokens': num_output_tokens,
-                'time_s': elapsed_time_s,
-                'tokens_per_s': tokens_per_second,
-                'generated_text': full_generated_text
-            })
-            
-            print(f"  Output tokens: {num_output_tokens}, Time: {elapsed_time_s:.2f}s, Speed: {tokens_per_second:.2f} tok/s")
-        
-        llm_engine.shutdown()
-        return results
-    
-    def run_llm_benchmark(self):
-        """Benchmark Large Language Model (32B)"""
-        print(f"\n{REFERENCE_COLOR}=== Benchmarking LLM (32B) ==={RESET}")
-        
-        model_path = MODEL_DICT['reference']['model_path']
-        
-        try:
-            llm_engine = sgl.Engine(
-                model_path=model_path,
-                tp_size=self.args.tp_size,
-                skip_tokenizer_init=True,
-                dtype="bfloat16"
-            )
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-        except Exception as e:
-            print(f"Failed to initialize LLM: {e}")
+            batch_input_tokens.append(tokenizer.encode(prompt_text))
+        return batch_input_tokens
+
+    def evaluate(self, model_type: str, use_batch: bool):
+        """Unified benchmark function.
+
+        Parameters
+        ----------
+        model_type : str
+            One of {"slm", "llm", "r2r"}.
+        use_batch : bool
+            Whether to evaluate with batch generation.
+        """
+        header_map = {
+            'slm': f"\n{QUICK_COLOR}=== Benchmarking SLM (1.5B){' - Batch' if use_batch else ''} ==={RESET}",
+            'llm': f"\n{REFERENCE_COLOR}=== Benchmarking LLM (32B){' - Batch' if use_batch else ''} ==={RESET}",
+            'r2r': f"\n=== Benchmarking R2R Dynamic Mode{' - Batch' if use_batch else ''} ===",
+        }
+        print(header_map.get(model_type.lower(), f"\n=== Benchmarking {model_type} ==="))
+
+        engine, tokenizer, is_r2r = self._init_model(model_type)
+        if engine is None or tokenizer is None:
             return None
-            
+
+        prompts = self.batch_prompts if use_batch else self.test_prompts
+        sampling_params_dict = {
+            "temperature": self.args.temperature,
+            "top_p": self.args.top_p,
+            "max_new_tokens": self.args.max_new_tokens,
+        }
+        sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
+
+        # =================== Batch evaluation ===================
+        if use_batch:
+            batch_input_tokens = self._prepare_batch_inputs(prompts, tokenizer)
+            print(f"Preparing batch of {len(prompts)} prompts...")
+
+            with PerformanceTimer() as timer:
+                if is_r2r:
+                    generated_texts, recorders = engine.generate(
+                        batch_input_tokens,
+                        max_new_tokens=self.args.max_new_tokens,
+                        temperature=self.args.temperature,
+                        top_p=self.args.top_p,
+                        record_generation=True,
+                        print_tokens=False,
+                    )
+                else:
+                    generated_stream = engine.generate(
+                        input_ids=batch_input_tokens,
+                        sampling_params=sampling_params_dict,
+                        stream=False,
+                    )
+                    generated_results = list(generated_stream)
+
+            elapsed_time_s = timer.get_elapsed_time()
+
+            # ------------------ Post-processing ------------------
+            total_output_tokens = 0
+            generated_texts_processed = []
+            total_quick_tokens = 0
+            total_reference_tokens = 0
+
+            if is_r2r:
+                for i, (text, rec) in enumerate(zip(generated_texts, recorders)):
+                    # Exclude prompt tokens from output token count
+                    num_output_tokens = len(tokenizer.encode(text)) - len(batch_input_tokens[i])
+                    total_output_tokens += num_output_tokens
+                    # Strip prompt from generated text for readability
+                    processed_text = tokenizer.decode(
+                        tokenizer.encode(text)[len(batch_input_tokens[i]):],
+                        skip_special_tokens=True,
+                    )
+                    generated_texts_processed.append(processed_text)
+
+                    quick_tokens = sum(1 for r in rec.records if r.source_model == 'quick')
+                    reference_tokens = sum(1 for r in rec.records if r.source_model == 'reference')
+                    total_quick_tokens += quick_tokens
+                    total_reference_tokens += reference_tokens
+            else:
+                for res in generated_results:
+                    text = tokenizer.decode(res['output_ids'], skip_special_tokens=True)
+                    generated_texts_processed.append(text)
+                    num_output_tokens = len(tokenizer.encode(text))
+                    total_output_tokens += num_output_tokens
+
+            tokens_per_second = total_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
+
+            result = {
+                'batch_size': len(prompts),
+                'total_output_tokens': total_output_tokens,
+                'total_time_s': elapsed_time_s,
+                'tokens_per_s': tokens_per_second,
+                'avg_tokens_per_request': total_output_tokens / len(prompts),
+                'generated_texts': generated_texts_processed,
+            }
+
+            if is_r2r:
+                quick_ratio = (
+                    total_quick_tokens / (total_quick_tokens + total_reference_tokens)
+                    if (total_quick_tokens + total_reference_tokens) > 0 else 0
+                )
+                result.update({
+                    'total_quick_tokens': total_quick_tokens,
+                    'total_reference_tokens': total_reference_tokens,
+                    'quick_ratio': quick_ratio,
+                })
+
+            # Logging summary
+            print(f"Batch completed: {total_output_tokens} tokens in {elapsed_time_s:.2f}s")
+            print(f"Speed: {tokens_per_second:.2f} tok/s")
+            print(f"Average tokens per request: {result['avg_tokens_per_request']:.2f}")
+            if is_r2r:
+                print(f"Quick: {total_quick_tokens}, Reference: {total_reference_tokens}, Quick ratio: {result['quick_ratio']:.2%}")
+
+            # Clean up
+            if hasattr(engine, 'shutdown'):
+                engine.shutdown()
+            return result
+
+        # =================== Single-prompt evaluation ===================
         results = []
-        
-        for i, prompt in enumerate(self.test_prompts):
-            print(f"Testing prompt {i+1}/{len(self.test_prompts)}: {prompt[:50]}...")
-            
+        for i, prompt in enumerate(prompts):
+            print(f"Testing prompt {i+1}/{len(prompts)}: {prompt[:50]}...")
             current_turn_messages = [{"role": "user", "content": prompt}]
             prompt_text = tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
-                add_generation_prompt=True
+                current_turn_messages,
+                tokenize=False,
+                add_generation_prompt=True,
             )
-            input_tokens = [tokenizer.encode(prompt_text)]
-            
-            sampling_params_dict = {
-                "temperature": self.args.temperature,
-                "top_p": self.args.top_p,
-                "max_new_tokens": self.args.max_new_tokens,
+            input_ids = [tokenizer.encode(prompt_text)]  # Always wrap in list to align with engine API
+
+            with PerformanceTimer() as timer:
+                if is_r2r:
+                    generated_texts, recorders = engine.generate(
+                        input_ids,
+                        max_new_tokens=self.args.max_new_tokens,
+                        temperature=self.args.temperature,
+                        top_p=self.args.top_p,
+                        record_generation=True,
+                        print_tokens=False,
+                    )
+                    generated_text_full = generated_texts[0]
+                else:
+                    generated_stream = engine.generate(
+                        input_ids=input_ids,
+                        sampling_params=sampling_params_dict,
+                        stream=False,
+                    )
+                    batch_res = list(generated_stream)
+                    generated_text_full = tokenizer.decode(
+                        batch_res[0]['output_ids'], skip_special_tokens=True
+                    )
+
+            elapsed_time_s = timer.get_elapsed_time()
+
+            if is_r2r:
+                # Strip prompt from generated part
+                output_text = tokenizer.decode(
+                    tokenizer.encode(generated_text_full)[len(input_ids[0]):],
+                    skip_special_tokens=True,
+                )
+                num_output_tokens = len(tokenizer.encode(generated_text_full)) - len(input_ids[0])
+            else:
+                output_text = generated_text_full
+                num_output_tokens = len(tokenizer.encode(output_text))
+
+            tokens_per_second = num_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
+
+            record = {
+                'prompt': prompt,
+                'output_tokens': num_output_tokens,
+                'time_s': elapsed_time_s,
+                'tokens_per_s': tokens_per_second,
+                'generated_text': output_text,
             }
-            sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
-            
-            full_generated_text = ""
-            
-            with PerformanceTimer() as timer:
-                generated_stream = llm_engine.generate(
-                    input_ids=input_tokens, 
-                    sampling_params=sampling_params_dict,
-                    stream=True
-                )
-                
-                for output_item in generated_stream:
-                    output_text = tokenizer.decode(output_item['output_ids'][-1:], skip_special_tokens=True)
-                    full_generated_text += output_text
-            
-            elapsed_time_s = timer.get_elapsed_time()
-            num_output_tokens = len(tokenizer.encode(full_generated_text))
-            tokens_per_second = num_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-            
-            results.append({
-                'prompt': prompt,
-                'output_tokens': num_output_tokens,
-                'time_s': elapsed_time_s,
-                'tokens_per_s': tokens_per_second,
-                'generated_text': full_generated_text
-            })
-            
+
+            if is_r2r:
+                recorder = recorders[0]
+                quick_tokens = sum(1 for r in recorder.records if r.source_model == 'quick')
+                reference_tokens = sum(1 for r in recorder.records if r.source_model == 'reference')
+                record.update({
+                    'quick_tokens': quick_tokens,
+                    'reference_tokens': reference_tokens,
+                    'quick_ratio': quick_tokens / (quick_tokens + reference_tokens) if (quick_tokens + reference_tokens) > 0 else 0,
+                })
+
+            results.append(record)
+
+            # Logging similar to original implementation
             print(f"  Output tokens: {num_output_tokens}, Time: {elapsed_time_s:.2f}s, Speed: {tokens_per_second:.2f} tok/s")
-        
-        llm_engine.shutdown()
+            if is_r2r:
+                print(f"  Quick: {quick_tokens}, Reference: {reference_tokens}, Quick ratio: {record['quick_ratio']:.2%}")
+
+        if hasattr(engine, 'shutdown'):
+            engine.shutdown()
         return results
-    
-    def run_r2r_benchmark(self):
-        """Benchmark R2R Dynamic Mode"""
-        print(f"\n=== Benchmarking R2R Dynamic Mode ===")
-        
-        if not self.args.router_path:
-            print("Error: router_path is required for R2R benchmark")
-            return None
-            
-        strategy_kwargs = {
-            'model_path': self.args.router_path
-        }
-        if self.args.neural_threshold:
-            strategy_kwargs['threshold'] = self.args.neural_threshold
 
-        ref_model_path = MODEL_DICT['reference']['model_path']
-        qck_model_path = MODEL_DICT['quick']['model_path']
+    def run_all_benchmarks(self):
+        """Run all benchmarks using unified evaluate method"""
+        print("Starting Speed Benchmark...")
+        print(f"Test prompts: {len(self.test_prompts)}")
+        print(f"Max new tokens: {self.args.max_new_tokens}")
+        print(f"Temperature: {self.args.temperature}")
+        print(f"Top-p: {self.args.top_p}")
 
-        sglang_kwargs = {
-            "dtype": "bfloat16",
-            "tp_size": self.args.tp_size
-        }
+        if self.args.test_batch:
+            print(f"Batch size: {self.args.batch_size}")
 
-        try:
-            generator = DynamicSimpleSGLangSelector(
-                device="cuda", 
-                dtype=torch.bfloat16,
-                switching_strategy='neural',
-                strategy_kwargs=strategy_kwargs,
-                is_record=True, 
-                sglang_kwargs=sglang_kwargs
-            )
-        except Exception as e:
-            print(f"Failed to initialize R2R generator: {e}")
-            return None
-            
-        results = []
-        
-        for i, prompt in enumerate(self.test_prompts):
-            print(f"Testing prompt {i+1}/{len(self.test_prompts)}: {prompt[:50]}...")
-            
-            current_turn_messages = [{"role": "user", "content": prompt}]
-            prompt_text = generator.tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            
-            input_ids = [generator.tokenizer.encode(prompt_text)]
-            
-            with PerformanceTimer() as timer:
-                generated_texts, recorders = generator.generate(
-                    input_ids,
-                    max_new_tokens=self.args.max_new_tokens,
-                    temperature=self.args.temperature,
-                    top_p=self.args.top_p,
-                    record_generation=True, 
-                    print_tokens=False
-                )
-            
-            elapsed_time_s = timer.get_elapsed_time()
-            generated_text_full = generated_texts[0]
-            
-            num_output_tokens = len(generator.tokenizer.encode(generated_text_full)) - len(input_ids[0])
-            tokens_per_second = num_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-            
-            # Get model usage statistics from recorder
-            recorder = recorders[0]
-            quick_tokens = sum(1 for record in recorder.records if record.source_model == 'quick')
-            reference_tokens = sum(1 for record in recorder.records if record.source_model == 'reference')
-            
-            results.append({
-                'prompt': prompt,
-                'output_tokens': num_output_tokens,
-                'time_s': elapsed_time_s,
-                'tokens_per_s': tokens_per_second,
-                'generated_text': generated_text_full,
-                'quick_tokens': quick_tokens,
-                'reference_tokens': reference_tokens,
-                'quick_ratio': quick_tokens / (quick_tokens + reference_tokens) if (quick_tokens + reference_tokens) > 0 else 0
-            })
-            
-            print(f"  Output tokens: {num_output_tokens}, Time: {elapsed_time_s:.2f}s, Speed: {tokens_per_second:.2f} tok/s")
-            print(f"  Quick: {quick_tokens}, Reference: {reference_tokens}, Quick ratio: {results[-1]['quick_ratio']:.2%}")
-        
-        if hasattr(generator, 'shutdown'):
-            generator.shutdown()
-        
-        return results
-    
+        # Mapping from flag to model_type string used by our unified evaluate
+        flag_to_model = [
+            (self.args.test_slm, 'SLM (1.5B)', 'slm'),
+            (self.args.test_llm, 'LLM (32B)', 'llm'),
+            (self.args.test_r2r, 'R2R', 'r2r'),
+        ]
+
+        for flag, display_name, model_key in flag_to_model:
+            if not flag:
+                continue
+            suffix = ' - Batch' if self.args.test_batch else ''
+            result_key = f"{display_name}{suffix}"
+            self.results[result_key] = self.evaluate(model_key, use_batch=self.args.test_batch)
+
+        self.print_summary()
+        self.save_results()
+
     def print_summary(self):
         """Print benchmark summary"""
         print(f"\n{'='*60}")
@@ -462,310 +525,6 @@ class ModelBenchmark:
             json.dump(self.results, f, indent=2, default=str)
         
         print(f"\nDetailed results saved to {filepath}")
-    
-    def run_all_benchmarks(self):
-        """Run all benchmarks"""
-        print("Starting Speed Benchmark...")
-        print(f"Test prompts: {len(self.test_prompts)}")
-        print(f"Max new tokens: {self.args.max_new_tokens}")
-        print(f"Temperature: {self.args.temperature}")
-        print(f"Top-p: {self.args.top_p}")
-        
-        if self.args.test_batch:
-            print(f"Batch size: {self.args.batch_size}")
-        
-        # Run SLM benchmark
-        if self.args.test_slm:
-            if self.args.test_batch:
-                self.results["SLM (1.5B) - Batch"] = self.run_slm_batch_benchmark()
-            else:
-                self.results["SLM (1.5B)"] = self.run_slm_benchmark()
-        
-        # Run LLM benchmark
-        if self.args.test_llm:
-            if self.args.test_batch:
-                self.results["LLM (32B) - Batch"] = self.run_llm_batch_benchmark()
-            else:
-                self.results["LLM (32B)"] = self.run_llm_benchmark()
-        
-        # Run R2R benchmark
-        if self.args.test_r2r:
-            if self.args.test_batch:
-                self.results["R2R - Batch"] = self.run_r2r_batch_benchmark()
-            else:
-                self.results["R2R"] = self.run_r2r_benchmark()
-        
-        self.print_summary()
-        self.save_results()
-
-    def run_slm_batch_benchmark(self):
-        """Benchmark Small Language Model (1.5B) with batch processing"""
-        print(f"\n{QUICK_COLOR}=== Benchmarking SLM (1.5B) - Batch Size {self.args.batch_size} ==={RESET}")
-        
-        model_path = MODEL_DICT['quick']['model_path']
-        
-        try:
-            llm_engine = sgl.Engine(
-                model_path=model_path,
-                tp_size=1,
-                skip_tokenizer_init=True,
-                dtype="bfloat16"
-            )
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-        except Exception as e:
-            print(f"Failed to initialize SLM: {e}")
-            return None
-        
-        print(f"Preparing batch of {len(self.batch_prompts)} diverse prompts...")
-        
-        # Prepare all prompts for batch processing
-        batch_messages = []
-        batch_input_tokens = []
-        for prompt in self.batch_prompts:
-            current_turn_messages = [{"role": "user", "content": prompt}]
-            prompt_text = tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            batch_input_tokens.append(tokenizer.encode(prompt_text))
-            batch_messages.append(current_turn_messages)
-        
-        sampling_params_dict = {
-            "temperature": self.args.temperature,
-            "top_p": self.args.top_p,
-            "max_new_tokens": self.args.max_new_tokens,
-        }
-        sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
-        
-        print(f"Starting batch generation...")
-        
-        with PerformanceTimer() as timer:
-            generated_stream = llm_engine.generate(
-                input_ids=batch_input_tokens, 
-                sampling_params=sampling_params_dict,
-                stream=False  # Disable streaming for batch processing
-            )
-            
-            # Collect all results
-            batch_results = list(generated_stream)
-        
-        elapsed_time_s = timer.get_elapsed_time()
-        
-        # Process results
-        total_output_tokens = 0
-        generated_texts = []
-        
-        for i, output_item in enumerate(batch_results):
-            generated_text = tokenizer.decode(output_item['output_ids'][len(batch_input_tokens[i]):], skip_special_tokens=True)
-            generated_texts.append(generated_text)
-            num_output_tokens = len(tokenizer.encode(generated_text))
-            total_output_tokens += num_output_tokens
-        
-        tokens_per_second = total_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-        
-        result = {
-            'batch_size': len(self.batch_prompts),
-            'total_output_tokens': total_output_tokens,
-            'total_time_s': elapsed_time_s,
-            'tokens_per_s': tokens_per_second,
-            'avg_tokens_per_request': total_output_tokens / len(self.batch_prompts),
-            'generated_texts': generated_texts
-        }
-        
-        print(f"Batch completed: {total_output_tokens} tokens in {elapsed_time_s:.2f}s")
-        print(f"Speed: {tokens_per_second:.2f} tok/s")
-        print(f"Average tokens per request: {result['avg_tokens_per_request']:.2f}")
-        
-        llm_engine.shutdown()
-        return result
-    
-    def run_llm_batch_benchmark(self):
-        """Benchmark Large Language Model (32B) with batch processing"""
-        print(f"\n{REFERENCE_COLOR}=== Benchmarking LLM (32B) - Batch Size {self.args.batch_size} ==={RESET}")
-        
-        model_path = MODEL_DICT['reference']['model_path']
-        
-        try:
-            llm_engine = sgl.Engine(
-                model_path=model_path,
-                tp_size=self.args.tp_size,
-                skip_tokenizer_init=True,
-                dtype="bfloat16"
-            )
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-        except Exception as e:
-            print(f"Failed to initialize LLM: {e}")
-            return None
-        
-        print(f"Preparing batch of {len(self.batch_prompts)} diverse prompts...")
-        
-        # Prepare all prompts for batch processing
-        batch_messages = []
-        batch_input_tokens = []
-        for prompt in self.batch_prompts:
-            current_turn_messages = [{"role": "user", "content": prompt}]
-            prompt_text = tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            batch_input_tokens.append(tokenizer.encode(prompt_text))
-            batch_messages.append(current_turn_messages)
-        
-        sampling_params_dict = {
-            "temperature": self.args.temperature,
-            "top_p": self.args.top_p,
-            "max_new_tokens": self.args.max_new_tokens,
-        }
-        sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
-        
-        print(f"Starting batch generation...")
-        
-        with PerformanceTimer() as timer:
-            generated_stream = llm_engine.generate(
-                input_ids=batch_input_tokens, 
-                sampling_params=sampling_params_dict,
-                stream=False  # Disable streaming for batch processing
-            )
-            
-            # Collect all results
-            batch_results = list(generated_stream)
-        
-        elapsed_time_s = timer.get_elapsed_time()
-        
-        # Process results
-        total_output_tokens = 0
-        generated_texts = []
-        
-        for i, output_item in enumerate(batch_results):
-            generated_text = tokenizer.decode(output_item['output_ids'][len(batch_input_tokens[i]):], skip_special_tokens=True)
-            generated_texts.append(generated_text)
-            num_output_tokens = len(tokenizer.encode(generated_text))
-            total_output_tokens += num_output_tokens
-        
-        tokens_per_second = total_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-        
-        result = {
-            'batch_size': len(self.batch_prompts),
-            'total_output_tokens': total_output_tokens,
-            'total_time_s': elapsed_time_s,
-            'tokens_per_s': tokens_per_second,
-            'avg_tokens_per_request': total_output_tokens / len(self.batch_prompts),
-            'generated_texts': generated_texts
-        }
-        
-        print(f"Batch completed: {total_output_tokens} tokens in {elapsed_time_s:.2f}s")
-        print(f"Speed: {tokens_per_second:.2f} tok/s")
-        print(f"Average tokens per request: {result['avg_tokens_per_request']:.2f}")
-        
-        llm_engine.shutdown()
-        return result
-    
-    def run_r2r_batch_benchmark(self):
-        """Benchmark R2R Dynamic Mode with batch processing"""
-        print(f"\n=== Benchmarking R2R Dynamic Mode - Batch Size {self.args.batch_size} ===")
-        
-        if not self.args.router_path:
-            print("Error: router_path is required for R2R benchmark")
-            return None
-            
-        strategy_kwargs = {
-            'model_path': self.args.router_path
-        }
-        if self.args.neural_threshold:
-            strategy_kwargs['threshold'] = self.args.neural_threshold
-
-        ref_model_path = MODEL_DICT['reference']['model_path']
-        qck_model_path = MODEL_DICT['quick']['model_path']
-
-        sglang_kwargs = {
-            "dtype": "bfloat16",
-            "tp_size": self.args.tp_size
-        }
-
-        try:
-            generator = DynamicSimpleSGLangSelector(
-                device="cuda", 
-                dtype=torch.bfloat16,
-                switching_strategy='neural',
-                strategy_kwargs=strategy_kwargs,
-                is_record=True, 
-                sglang_kwargs=sglang_kwargs
-            )
-        except Exception as e:
-            print(f"Failed to initialize R2R generator: {e}")
-            return None
-        
-        print(f"Preparing batch of {len(self.batch_prompts)} diverse prompts...")
-        
-        # Prepare all prompts for batch processing
-        batch_messages = []
-        batch_input_ids = []
-        for prompt in self.batch_prompts:
-            current_turn_messages = [{"role": "user", "content": prompt}]
-            prompt_text = generator.tokenizer.apply_chat_template(
-                current_turn_messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            input_ids = generator.tokenizer.encode(prompt_text)
-            batch_input_ids.append(input_ids)
-            batch_messages.append(current_turn_messages)
-        
-        print(f"Starting batch generation...")
-        
-        with PerformanceTimer() as timer:
-            generated_texts, recorders = generator.generate(
-                batch_input_ids,
-                max_new_tokens=self.args.max_new_tokens,
-                temperature=self.args.temperature,
-                top_p=self.args.top_p,
-                record_generation=True, 
-                print_tokens=False
-            )
-        
-        elapsed_time_s = timer.get_elapsed_time()
-        
-        # Process results
-        total_output_tokens = 0
-        total_quick_tokens = 0
-        total_reference_tokens = 0
-        
-        for i, (generated_text, recorder) in enumerate(zip(generated_texts, recorders)):
-            num_output_tokens = len(generator.tokenizer.encode(generated_text)) - len(batch_input_ids[i])
-            total_output_tokens += num_output_tokens
-            
-            # Get model usage statistics from recorder
-            quick_tokens = sum(1 for record in recorder.records if record.source_model == 'quick')
-            reference_tokens = sum(1 for record in recorder.records if record.source_model == 'reference')
-            total_quick_tokens += quick_tokens
-            total_reference_tokens += reference_tokens
-        
-        tokens_per_second = total_output_tokens / elapsed_time_s if elapsed_time_s > 0 else 0
-        quick_ratio = total_quick_tokens / (total_quick_tokens + total_reference_tokens) if (total_quick_tokens + total_reference_tokens) > 0 else 0
-        
-        result = {
-            'batch_size': len(self.batch_prompts),
-            'total_output_tokens': total_output_tokens,
-            'total_time_s': elapsed_time_s,
-            'tokens_per_s': tokens_per_second,
-            'avg_tokens_per_request': total_output_tokens / len(self.batch_prompts),
-            'total_quick_tokens': total_quick_tokens,
-            'total_reference_tokens': total_reference_tokens,
-            'quick_ratio': quick_ratio,
-            'generated_texts': generated_texts
-        }
-        
-        print(f"Batch completed: {total_output_tokens} tokens in {elapsed_time_s:.2f}s")
-        print(f"Speed: {tokens_per_second:.2f} tok/s")
-        print(f"Average tokens per request: {result['avg_tokens_per_request']:.2f}")
-        print(f"Quick: {total_quick_tokens}, Reference: {total_reference_tokens}, Quick ratio: {quick_ratio:.2%}")
-        
-        if hasattr(generator, 'shutdown'):
-            generator.shutdown()
-        
-        return result
 
 def main():
     parser = argparse.ArgumentParser(description="Speed Benchmark: R2R vs SLM vs LLM")
