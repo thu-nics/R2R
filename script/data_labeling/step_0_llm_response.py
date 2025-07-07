@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 import sglang as sgl
+from r2r.utils.config import MODEL_DICT
 
 # os.environ["HF_DATASETS_OFFLINE"] = "1"
 
@@ -51,7 +52,7 @@ def parse_args():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+        default=MODEL_DICT["reference"]["model_path"],
         help="Path or name of the model to use",
     )
 
@@ -87,6 +88,13 @@ def parse_args():
         "--use_hf_dataset",
         action="store_true",
         help="Use HuggingFace dataset as input",
+    )
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        help="Use HuggingFace dataset from train/test",
     )
     
     # Generation configuration
@@ -383,7 +391,7 @@ def main():
     # Load the unified dataset
     try:
         if args.use_hf_dataset:
-            dataset = load_dataset(args.dataset_path, split="train")
+            dataset = load_dataset(args.dataset_path, split=args.split)
         else:
             dataset = load_from_disk(args.dataset_path)
         print(f"Loaded unified dataset from {args.dataset_path}")

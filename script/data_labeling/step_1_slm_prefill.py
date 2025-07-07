@@ -511,7 +511,6 @@ def main():
         "--test_model_list",
         nargs="+",
         type=str,
-        required=True,
         help="List of test models to run",
     )
     parser.add_argument(
@@ -550,7 +549,11 @@ def main():
     )
     args = parser.parse_args()
 
-    process_dataset(args)
+    if args.test_model_list is None:
+        args.test_model_list=[f"{MODEL_DICT['quick']['model_path']}"]
+        process_dataset(args)
+    else:
+        process_dataset(args)
 
     # save args as json
     with open(os.path.join(args.output_path, "args.json"), "w") as f:
