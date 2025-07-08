@@ -279,6 +279,7 @@ def process_dataset(args):
                 
                 # Use batched sharded sampling instead of single sequence sampling
                 pred = sample_token_batched_sharded(logits[0], temperature=args.temperature, top_p=args.top_p, top_k=args.top_k, shard_size=3000)
+
                 pred = pred.cpu()
 
                 # Extract token IDs and data IDs

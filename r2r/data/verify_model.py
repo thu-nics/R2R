@@ -5,7 +5,7 @@ from transformers import AutoTokenizer
 import sglang as sgl
 from sglang.srt.hf_transformers_utils import get_tokenizer
 from dataclasses import dataclass, asdict
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Any
 import pandas as pd
 import os
 
@@ -44,7 +44,18 @@ class ComparisonPoint:
 class VerifyModel:
     """Model for judging the similarity between two text continuations"""
 
-    def __init__(self, device="cuda", dtype=torch.bfloat16, model_name=None, verify_mode="divergent", max_new_tokens=128, mem_fraction_static=0.5, tp_size=2, base_gpu_id=0, apply_chat_template_kwargs=None):
+    def __init__(
+        self,
+        model_name: str,
+        device: str = "cuda",
+        dtype: torch.dtype = torch.bfloat16,
+        verify_mode: str = "divergent",
+        max_new_tokens: int = 128,
+        mem_fraction_static: float = 0.5,
+        tp_size: int = 2,
+        base_gpu_id: int = 0,
+        apply_chat_template_kwargs: Optional[Dict[str, Any]] = None,
+    ):
         self.device = device
         self.model_name = model_name
         self.verify_mode = verify_mode
@@ -76,7 +87,7 @@ class VerifyModel:
 
         # Create the system prompt message
         self.system_message = [{"role": "system", "content": self.system_prompt}]
-    
+
     @staticmethod
     def get_divergent_user_message_common_context(text1: str, text2: str, text3: str) -> List[Dict[str, str]]:
         """Create chat messages for the comparison task"""
@@ -280,18 +291,18 @@ Sentence 2:
                     diverge_point.small_diverge_text,
                     diverge_point.reference_diverge_text
                 )
-                
+
             else:
                 raise ValueError(f"Invalid verify mode: {self.verify_mode}")
 
             # Prepare full prompt and tokenize
             user_message = [{"role": "user", "content": user_prompt}]
             messages = self.system_message + user_message
-            
+
             # Merge default kwargs with user-provided kwargs
             chat_template_kwargs = {"tokenize": False, "add_generation_prompt": True}
             chat_template_kwargs.update(self.apply_chat_template_kwargs)
-            
+
             full_prompt = self.tokenizer.apply_chat_template(messages, **chat_template_kwargs)
             input_token_ids = self.tokenizer.encode(full_prompt)
             input_ids_list.append(input_token_ids)
@@ -361,12 +372,12 @@ Sentence 2:
             # Fall back to simple digit extraction
             match = re.search(r'\d+', response)
             score = int(match.group()) if match else -1
-        
+
         # For divergent mode, only accept 0 or 1
         if self.verify_mode == "divergent" and score not in [0, 1]:
             print(f"Warning: Unexpected score {score} in divergent mode. Setting to -1.")
             score = -1
-            
+
         return score
 
     def shutdown(self):
