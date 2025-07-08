@@ -135,6 +135,40 @@ def categorize_token_types(input_ids, tokenizer):
     return token_types
 
 
+def sample_token_batched_sharded(logits, temperature=1.0, top_p=1.0, top_k=-1, shard_size=10000):
+    """
+    Sample tokens from batched logits with sharding for large batch sizes.
+    
+    Args:
+        logits: Tensor of shape [batch_size, vocab_size]
+        temperature: Temperature for sampling
+        top_p: Top-p probability threshold for nucleus sampling
+        top_k: Top-k threshold for sampling
+        shard_size: Maximum size of each shard (default: 3000)
+        
+    Returns:
+        Tensor of sampled token IDs for the entire batch
+    """
+    batch_size = logits.shape[0]
+    
+    # If batch size is smaller than shard size, process directly
+    if batch_size <= shard_size:
+        return sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k)
+    
+    # Split into shards and process each one
+    results = []
+    for i in range(0, batch_size, shard_size):
+        end_idx = min(i + shard_size, batch_size)
+        shard_logits = logits[i:end_idx]
+        
+        # Sample from this shard
+        shard_predictions = sample_token(shard_logits, temperature=temperature, top_p=top_p, top_k=top_k)
+        results.append(shard_predictions)
+    
+    # Concatenate all results
+    return torch.cat(results, dim=0)
+
+
 def process_dataset(args):
     """Process the dataset with all models and directly create the final prediction_comparison.csv"""
     # Create output directory
@@ -243,7 +277,9 @@ def process_dataset(args):
                 outputs = model(input_ids, output_hidden_states=True)
                 logits = outputs.logits
                 
-                pred = sample_token(logits[0], temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
+                # Use batched sharded sampling instead of single sequence sampling
+                pred = sample_token_batched_sharded(logits[0], temperature=args.temperature, top_p=args.top_p, top_k=args.top_k, shard_size=3000)
+
                 pred = pred.cpu()
 
                 # Extract token IDs and data IDs
@@ -400,7 +436,7 @@ def create_data_analysis(
     # Add predictions from each model
     for model_size in tqdm(model_sizes, desc="Processing model sizes"):
         if model_size in all_predictions:
-            df["SLM_predictions"] = all_predictions[model_size].numpy()
+            df["SLM_predictions"] = all_predictions[model_size].cpu().numpy()
 
             # Load top logits and indices for this model
             top_logits = torch.load(
