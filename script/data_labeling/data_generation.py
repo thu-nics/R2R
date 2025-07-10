@@ -181,7 +181,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     program_path=args.program_path
     
-    if args.skip_step_zero is False:
+    if not args.skip_step_zero:
         if args.use_hf_dataset:
             step_0_command = [
                 f"python {program_path}/step_0_llm_response.py --output_dir {output_dir}/query_dataset_{args.split}/LLM_response --tp_size {args.tp_size} --dataset_path {args.dataset_path} --use_hf_dataset --split {args.split}"

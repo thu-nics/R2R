@@ -630,7 +630,7 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
                 Each element in the list is a dictionary with the keys and values: input_ids (List[int]), output_ids (List[int]), __req__ (Req); as well as the keys and values specified in the custom_params in sampling_params.
         """
         if self.num_continuation == -1:
-            raise ValueError("num_continuation should not be -1, please set before calling the generation function of the model")
+            raise ValueError("num_continuation should not be -1. Ensure it is set before invoking the model's generation function, which requires a valid continuation limit.")
             
         batch_size = logits.shape[0]
         assert batch_size == len(custom_param_list)

@@ -551,9 +551,8 @@ def main():
 
     if args.test_model_list is None:
         args.test_model_list=[f"{MODEL_DICT['quick']['model_path']}"]
-        process_dataset(args)
-    else:
-        process_dataset(args)
+    
+    process_dataset(args)
 
     # save args as json
     with open(os.path.join(args.output_path, "args.json"), "w") as f:
