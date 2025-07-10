@@ -54,7 +54,7 @@ def parse_args():
         "--model_path",
         type=str,
         default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-        help="Model name to use for API requests",
+        help="Model name to use for API requests and to load tokenizers.",
     )
 
     # API configuration

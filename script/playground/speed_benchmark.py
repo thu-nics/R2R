@@ -547,7 +547,7 @@ def main():
     # R2R configuration
     parser.add_argument('--router_path', type=str, default=None,
                         help='Path to the critical classifier model for R2R mode')
-    parser.add_argument('--neural_threshold', type=float, default=0.5,
+    parser.add_argument('--neural_threshold', type=float, default=0.9,
                         help='Threshold for the neural switching strategy')
     
     # Hardware configuration
