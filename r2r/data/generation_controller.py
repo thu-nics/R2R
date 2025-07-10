@@ -53,7 +53,7 @@ class DivergePoint:
 
 
 class ModelController:
-    def __init__(self, comparison_model: str = 'reference', mem_fraction_static: float = 0.5, tp_size: int = 1, dp_size: int = 1, base_gpu_id_main: int = 0, base_gpu_id_reference: int = 1, disable_cuda_graph: bool = True):
+    def __init__(self, comparison_model: str = 'reference', mem_fraction_static: float = 0.5, tp_size: int = 1, dp_size: int = 1, base_gpu_id_main: int = 0, base_gpu_id_reference: int = 1, disable_cuda_graph: bool = False):
         """Initialize models for generation control using sglang with token-based processing"""
         # Load models
         logger.info("Loading models...")
@@ -104,16 +104,23 @@ class ModelController:
         eos_tokens_config_path = os.path.join(os.path.dirname(__file__), 'eos_tokens_config.json')
         if not os.path.exists(eos_tokens_config_path):
             tokenizer = AutoTokenizer.from_pretrained(small_model_path)
-            save_semantic_tokens_config(tokenizer, eos_tokens_config_path)
+            save_semantic_tokens_config(tokenizer, eos_tokens_config_path, tokenizer_name=MODEL_DICT["quick"]["model_name"])
             print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
-        else:
-            print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
-            
+        
         with open(eos_tokens_config_path, 'r') as f:
             eos_tokens_config = json.load(f)
-            self.eos_token_ids = [int(key) for key in eos_tokens_config["semantic_tokens_mapping"].keys()]
-            self.eos_token_ids.append(MODEL_DICT["special_tokens"]["think_start"])
-            self.eos_token_ids.append(MODEL_DICT["special_tokens"]["think_end"])
+            if eos_tokens_config["tokenizer_name"] != MODEL_DICT["quick"]["model_name"]:
+                tokenizer = AutoTokenizer.from_pretrained(small_model_path)
+                save_semantic_tokens_config(tokenizer, eos_tokens_config_path, tokenizer_name=MODEL_DICT["quick"]["model_name"])
+                print(f"eos_tokens_config.json doesn't match the current model, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
+            else:
+                print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
+
+        with open(eos_tokens_config_path, 'r') as f:
+            eos_tokens_config = json.load(f)
+            self.stop_token_ids = [int(key) for key in eos_tokens_config["semantic_tokens_mapping"].keys()]
+            self.stop_token_ids.append(MODEL_DICT["special_tokens"]["think_start"])
+            self.stop_token_ids.append(MODEL_DICT["special_tokens"]["think_end"])
             
         # self.eos_token_ids = [
         #     151648, # <think>
@@ -128,14 +135,21 @@ class ModelController:
         # ]
         
         self.eos_tokens = [
-            self.tokenizer.decode([token_id]) for token_id in self.eos_token_ids
+            self.tokenizer.decode([token_id]) for token_id in self.stop_token_ids
         ]
+
+        # Initialize the DeterministicLogitProcessor
+        self.deterministic_logit_processor = DeterministicLogitProcessor(
+            stop_token_ids=self.stop_token_ids,
+            eos_token_id=self.tokenizer.eos_token_id,
+            num_continuation=-1  # Default value, will be updated when used
+        )
 
         logger.info("ModelController initialized successfully")
 
     def _is_eos_generated(self, token_id: int) -> bool:
         """Check if generated token is an EOS token"""
-        return token_id in self.eos_token_ids
+        return token_id in self.stop_token_ids
 
     @staticmethod
     def _greedy_generate(
@@ -259,20 +273,18 @@ class ModelController:
         # Set EOS token behavior based on num_continuation value
         if num_continuation == 1:
             # For single continuation, use our custom EOS tokens
-            sampling_params["stop_token_ids"] = self.eos_token_ids
+            sampling_params["stop_token_ids"] = self.stop_token_ids
         elif num_continuation > 1:
-            # For multiple continuations, use custom stopping function
-            sampling_params.update({
-                "custom_params": {"stop_token_ids": self.eos_token_ids, "eos_token_id": self.tokenizer.eos_token_id, "num_continuation": num_continuation},
-            })
+            # For multiple continuations, update the logit processor's num_continuation
+            self.deterministic_logit_processor.num_continuation = num_continuation
+            sampling_params["custom_params"] = {'dummy_for_req': 1}
         # When num_continuation == -1, we don't set stop_token_ids, 
         # letting the model generate until its default EOS or max_new_tokens
 
         # Generate completions in batch using token IDs directly
         try:
             if num_continuation > 1:
-                deterministic_logit_processor = DeterministicLogitProcessor(len(input_ids_list))
-                outputs = model.generate(input_ids=input_ids_list, sampling_params=sampling_params, custom_logit_processor=deterministic_logit_processor.to_str())
+                outputs = model.generate(input_ids=input_ids_list, sampling_params=sampling_params, custom_logit_processor=self.deterministic_logit_processor.to_str())
             else:
                 outputs = model.generate(input_ids=input_ids_list, sampling_params=sampling_params)
 
@@ -288,13 +300,11 @@ class ModelController:
 
                 # Decode to text for compatibility with existing code
                 generated_text = self.tokenizer.decode(generated_token_ids)
-
                 results.append({
                     'generated_tokens': generated_token_ids,
                     'past_key_values': None,  # Not used in sglang Engine
                     'generated_text': generated_text
                 })
-
             return results
 
         except Exception as e:
@@ -336,7 +346,7 @@ class ModelController:
         if num_continuation > 0:
             eos_count = 0
             for i, token in enumerate(generated_tokens):
-                if token in self.eos_token_ids:
+                if token in self.stop_token_ids:
                     eos_count += 1
                     if eos_count >= num_continuation:
                         generated_tokens = generated_tokens[:i+1]
@@ -607,10 +617,10 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
     """A dummy logit processor that changes the logits to always
     sample the given token id.
     """
-    def __init__(self, batch_size: int):
-        self.eos_token_id = None
-        self.stop_token_ids = None
-        self.num_continuation = None
+    def __init__(self, stop_token_ids: List[int], eos_token_id: int, num_continuation: int):
+        self.eos_token_id = eos_token_id
+        self.stop_token_ids_set = set(stop_token_ids)  # Convert to set for O(1) lookup
+        self.num_continuation = num_continuation
 
     def __call__(self, logits: Tensor, custom_param_list: List[Dict]):
         """
@@ -619,26 +629,34 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
             custom_param_list: List[Dict]. The size of the list is the same as the batch size.
                 Each element in the list is a dictionary with the keys and values: input_ids (List[int]), output_ids (List[int]), __req__ (Req); as well as the keys and values specified in the custom_params in sampling_params.
         """
-        # Check that the number of logits matches the number of custom parameters
-        assert logits.shape[0] == len(custom_param_list)
-        eos_token_id_key = "eos_token_id"
-        stop_token_ids_key = "stop_token_ids"
-        num_continuation_key = "num_continuation"
+        if self.num_continuation == -1:
+            raise ValueError("num_continuation should not be -1. Ensure it is set before invoking the model's generation function, which requires a valid continuation limit.")
+            
+        batch_size = logits.shape[0]
+        assert batch_size == len(custom_param_list)
+        
+        # Vectorized argmax computation for all batch items at once
+        predicted_tokens = logits.argmax(dim=-1)  # shape: (batch_size,)
+        
+        # Initialize mask for items that need EOS forcing
+        eos_mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+        
         for i, param_dict in enumerate(custom_param_list):
-            # Assign highest probability to the specified token
-            eos_token_id = param_dict[eos_token_id_key]
-            stop_token_ids = param_dict[stop_token_ids_key]
-            num_continuation = param_dict[num_continuation_key]
-            
-            req = custom_param_list[i]["__req__"]
+            req = param_dict["__req__"]
             if not hasattr(req, "num_continue_count"):
-                setattr(req, "num_continue_count", 0)  # 默认值设置为 0
+                req.num_continue_count = 0
             
-            if req.num_continue_count >= num_continuation:
-                logits[i, :] = -float("inf")
-                logits[i, eos_token_id] = 1.0
+            # Check if this batch item has reached the continuation limit
+            if req.num_continue_count >= self.num_continuation:
+                eos_mask[i] = True
             
-            if logits[i].argmax(dim=-1) in stop_token_ids:
+            # Use set lookup for O(1) time complexity instead of O(n) list search
+            if predicted_tokens[i].item() in self.stop_token_ids_set:
                 req.num_continue_count += 1
+        
+        # Apply EOS forcing to all relevant batch items at once using vectorized operations
+        if eos_mask.any():
+            logits[eos_mask, :] = -float("inf")
+            logits[eos_mask, self.eos_token_id] = 1.0
        
         return logits
