@@ -191,9 +191,9 @@ def main():
                 f"python {program_path}/step_0_llm_response.py --output_dir {output_dir}/query_dataset_{args.split}/LLM_response --tp_size {args.tp_size} --dataset_path {args.dataset_path} --split {args.split}"
             ]
     
-    fail_to_run = run_commands_sequentially(step_0_command, continue_on_error=CONTINUE_ON_ERROR)
-    if fail_to_run:
-        return
+        fail_to_run = run_commands_sequentially(step_0_command, continue_on_error=CONTINUE_ON_ERROR)
+        if fail_to_run:
+            return
 
     step_1_command = [
         f"python {program_path}/step_1_slm_prefill.py --dataset_path {output_dir}/query_dataset_{args.split}/LLM_response/dataset_finished --output_path {output_dir}/query_dataset_{args.split}/LLM_response/SLM_prefill --top_p {args.top_p} --top_k {args.top_k} --temperature {args.temperature}"

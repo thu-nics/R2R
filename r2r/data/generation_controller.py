@@ -104,7 +104,7 @@ class ModelController:
         eos_tokens_config_path = os.path.join(os.path.dirname(__file__), 'eos_tokens_config.json')
         if not os.path.exists(eos_tokens_config_path):
             tokenizer = AutoTokenizer.from_pretrained(small_model_path)
-            save_semantic_tokens_config(tokenizer, eos_tokens_config_path)
+            save_semantic_tokens_config(tokenizer, eos_tokens_config_path, tokenizer_name=MODEL_DICT["quick"]["model_name"])
             print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
         
         with open(eos_tokens_config_path, 'r') as f:
@@ -112,7 +112,7 @@ class ModelController:
             if eos_tokens_config["tokenizer_name"] != MODEL_DICT["quick"]["model_name"]:
                 tokenizer = AutoTokenizer.from_pretrained(small_model_path)
                 save_semantic_tokens_config(tokenizer, eos_tokens_config_path, tokenizer_name=MODEL_DICT["quick"]["model_name"])
-                print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
+                print(f"eos_tokens_config.json doesn't match the current model, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
             else:
                 print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
 
