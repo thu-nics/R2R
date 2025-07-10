@@ -277,6 +277,7 @@ class ModelController:
         elif num_continuation > 1:
             # For multiple continuations, update the logit processor's num_continuation
             self.deterministic_logit_processor.num_continuation = num_continuation
+            sampling_params["custom_params"] = {'dummy_for_req': 1}
         # When num_continuation == -1, we don't set stop_token_ids, 
         # letting the model generate until its default EOS or max_new_tokens
 
