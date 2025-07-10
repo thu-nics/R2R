@@ -242,8 +242,8 @@ class ModelBenchmark:
             Whether to evaluate with batch generation.
         """
         header_map = {
-            'slm': f"\n{QUICK_COLOR}=== Benchmarking SLM (1.5B){' - Batch' if use_batch else ''} ==={RESET}",
-            'llm': f"\n{REFERENCE_COLOR}=== Benchmarking LLM (32B){' - Batch' if use_batch else ''} ==={RESET}",
+            'slm': f"\n{QUICK_COLOR}=== Benchmarking SLM{' - Batch' if use_batch else ''} ==={RESET}",
+            'llm': f"\n{REFERENCE_COLOR}=== Benchmarking LLM{' - Batch' if use_batch else ''} ==={RESET}",
             'r2r': f"\n=== Benchmarking R2R Dynamic Mode{' - Batch' if use_batch else ''} ===",
         }
         print(header_map.get(model_type.lower(), f"\n=== Benchmarking {model_type} ==="))
@@ -547,7 +547,7 @@ def main():
     # R2R configuration
     parser.add_argument('--router_path', type=str, default=None,
                         help='Path to the critical classifier model for R2R mode')
-    parser.add_argument('--neural_threshold', type=float, default=0.5,
+    parser.add_argument('--neural_threshold', type=float, default=0.9,
                         help='Threshold for the neural switching strategy')
     
     # Hardware configuration
