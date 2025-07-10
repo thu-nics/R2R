@@ -53,7 +53,7 @@ class DivergePoint:
 
 
 class ModelController:
-    def __init__(self, comparison_model: str = 'reference', mem_fraction_static: float = 0.5, tp_size: int = 1, dp_size: int = 1, base_gpu_id_main: int = 0, base_gpu_id_reference: int = 1, disable_cuda_graph: bool = True):
+    def __init__(self, comparison_model: str = 'reference', mem_fraction_static: float = 0.5, tp_size: int = 1, dp_size: int = 1, base_gpu_id_main: int = 0, base_gpu_id_reference: int = 1, disable_cuda_graph: bool = False):
         """Initialize models for generation control using sglang with token-based processing"""
         # Load models
         logger.info("Loading models...")
@@ -106,9 +106,16 @@ class ModelController:
             tokenizer = AutoTokenizer.from_pretrained(small_model_path)
             save_semantic_tokens_config(tokenizer, eos_tokens_config_path)
             print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
-        else:
-            print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
-            
+        
+        with open(eos_tokens_config_path, 'r') as f:
+            eos_tokens_config = json.load(f)
+            if eos_tokens_config["tokenizer_name"] != MODEL_DICT["quick"]["model_name"]:
+                tokenizer = AutoTokenizer.from_pretrained(small_model_path)
+                save_semantic_tokens_config(tokenizer, eos_tokens_config_path, tokenizer_name=MODEL_DICT["quick"]["model_name"])
+                print(f"Missing eos_tokens_config.json, saved it with {small_model_path} tokenizer to {eos_tokens_config_path}")
+            else:
+                print(f"Found eos_tokens_config.json at {eos_tokens_config_path}")
+
         with open(eos_tokens_config_path, 'r') as f:
             eos_tokens_config = json.load(f)
             self.stop_token_ids = [int(key) for key in eos_tokens_config["semantic_tokens_mapping"].keys()]
@@ -292,13 +299,11 @@ class ModelController:
 
                 # Decode to text for compatibility with existing code
                 generated_text = self.tokenizer.decode(generated_token_ids)
-
                 results.append({
                     'generated_tokens': generated_token_ids,
                     'past_key_values': None,  # Not used in sglang Engine
                     'generated_text': generated_text
                 })
-
             return results
 
         except Exception as e:
