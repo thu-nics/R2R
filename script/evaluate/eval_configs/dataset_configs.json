@@ -1,13 +1,13 @@
 {
     "aime": {
-        "name": "AIME Mathematical Problems, default to AIME24",
-        "path": "Maxwell-Jia/AIME_2024",
+        "name": "AIME Mathematical Problems, default to AIME24-25",
+        "path": "GY2233/AIME-2024-2025",
         "answer_type": "boxed",
         "id_field": "ID",
         "question_field": "Problem",
         "answer_field": "Answer",
         "prompt_template": "{question}",
-        "description": "American Invitational Mathematics Examination problems with numerical answers"
+        "description": "American Invitational Mathematics Examination problems with numerical answers from 2024 to 2025"
     },
     "aime23": {
         "name": "AIME Mathematical Problems",

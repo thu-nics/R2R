@@ -8,6 +8,11 @@ Outputs:
 - A directory (specified by `--output_path`, default: `output/playground/continuation`) containing:
     - `args.json`: A JSON file logging the arguments used for the script execution.
     - `generation_results_data_all_real.csv`: Each row corresponds to a processed mismatch, detailing the generated continuation from the SLM token and the LLM continuation, along with their respective contexts.
+
+Resume Functionality:
+- Use `--resume` flag to skip already processed data IDs by checking existing output CSV files.
+- Works with both range-specific (--low/--high) and full dataset processing.
+- Automatically detects and skips data IDs that have already been saved to the output file.
 """
 
 import os
@@ -60,9 +65,29 @@ def parse_args():
                         help='Number of mismatches to batch together for generation')
     parser.add_argument('--skip_stress_divergent_token', action='store_true', default=False,
                         help='Whether to skip stressing the divergent token')
+    parser.add_argument('--resume', action='store_true', default=False,
+                        help='Whether to resume from existing results by skipping already processed data IDs')
     parser.add_argument('--is_print', default=False,
                         help='Whether to print the results')
     return parser.parse_args()
+
+def get_processed_data_ids(results_path):
+    """Read existing results file and return set of processed data_ids"""
+    if not results_path.exists():
+        return set()
+    
+    try:
+        existing_df = pd.read_csv(results_path)
+        if 'data_id' in existing_df.columns:
+            processed_ids = set(existing_df['data_id'].unique())
+            logger.info(f"Found {len(processed_ids)} already processed data IDs in {results_path}")
+            return processed_ids
+        else:
+            logger.warning(f"No 'data_id' column found in existing results file {results_path}")
+            return set()
+    except Exception as e:
+        logger.warning(f"Could not read existing results file {results_path}: {e}")
+        return set()
 
 def main():
     args = parse_args()
@@ -102,6 +127,28 @@ def main():
         print(f"Loaded {len(sample_data)} rows with data sample IDs in range [{args.low}, {args.high})")
     else:
         print(f"Loaded {len(sample_data)} rows with all data sample IDs")
+
+    # Handle resume functionality
+    if args.resume:
+        logger.info("Resume mode enabled - checking for existing results...")
+        processed_data_ids = get_processed_data_ids(results_path)
+        
+        if processed_data_ids:
+            # Filter out already processed data IDs
+            original_count = len(sample_data)
+            sample_data = sample_data[~sample_data['data_id'].isin(processed_data_ids)]
+            remaining_count = len(sample_data)
+            
+            logger.info(f"Resume: Filtered out {original_count - remaining_count} already processed data IDs")
+            logger.info(f"Resume: {remaining_count} data samples remaining to process")
+            
+            if remaining_count == 0:
+                logger.info("All data samples have already been processed. Exiting.")
+                return
+        else:
+            logger.info("Resume: No existing results found, processing all data samples")
+    else:
+        logger.info("Resume mode disabled - processing all data samples (existing results may be overwritten)")
 
     # Process the data
     processor = DataProcessor(sample_data, max_tokens=args.max_tokens, comparison_model='real')
