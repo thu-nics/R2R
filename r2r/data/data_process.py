@@ -154,6 +154,10 @@ class DataProcessor:
                     logger.warning(f"No reasoning or response tokens found in data item {data_id}")
                     continue
                 
+                if len(valid_rows) == len(data_item):
+                    logger.warning(f"No reasoning or response tokens found in data item {data_id}")
+                    continue
+
                 # Reset index to make shifting easier
                 valid_rows = valid_rows.reset_index(drop=True)
                 

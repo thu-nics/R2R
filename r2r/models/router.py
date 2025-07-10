@@ -210,6 +210,10 @@ def save_model(
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     # Save the model config with all parameters
     output_file_all = output_file.replace(".pt", "_all.pt")
+    
+    # Create output_file_all directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_file_all), exist_ok=True)
+
     torch.save(model_config, output_file_all)
     
     # Remove token_embeddings.weight from state_dict

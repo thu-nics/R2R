@@ -175,9 +175,9 @@ class LiveDivergentLabeler:
             
             # Check if we should consider this as "next context" (crossing EOS)
             is_next_context = (
-                quick_token in self.gen_controller.eos_token_ids
+                quick_token in self.gen_controller.stop_token_ids
                 ) and (
-                context[-1] in self.gen_controller.eos_token_ids
+                context[-1] in self.gen_controller.stop_token_ids
             )
             
             is_skip_input = False
