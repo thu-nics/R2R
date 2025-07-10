@@ -203,8 +203,8 @@ def main():
                     context_text=mismatch.context_text,
                     pred_text=pred_text,
                     model_output_text=comparison_output["generated_text"],
-                    is_next_context=(pred_comparison_token in gen_controller.eos_token_ids)
-                    and (mismatch.prev_real_token in gen_controller.eos_token_ids),
+                    is_next_context=(pred_comparison_token in gen_controller.stop_token_ids)
+                    and (mismatch.prev_real_token in gen_controller.stop_token_ids),
                     num_continuation=args.num_continuation,
                     previous_context=args.previous_context,
                     common_previous_context=args.common_previous_context,
@@ -223,8 +223,8 @@ def main():
                         context_text=mismatch.context_text,
                         pred_text=pred_small_text,
                         model_output_text=small_output['generated_text'],
-                        is_next_context=(mismatch.pred_small_token in gen_controller.eos_token_ids) 
-                            and (mismatch.prev_real_token in gen_controller.eos_token_ids),
+                        is_next_context=(mismatch.pred_small_token in gen_controller.stop_token_ids) 
+                            and (mismatch.prev_real_token in gen_controller.stop_token_ids),
                         num_continuation=args.num_continuation,
                         previous_context=args.previous_context,
                         common_previous_context=args.common_previous_context,
