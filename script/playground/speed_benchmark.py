@@ -242,8 +242,8 @@ class ModelBenchmark:
             Whether to evaluate with batch generation.
         """
         header_map = {
-            'slm': f"\n{QUICK_COLOR}=== Benchmarking SLM (1.5B){' - Batch' if use_batch else ''} ==={RESET}",
-            'llm': f"\n{REFERENCE_COLOR}=== Benchmarking LLM (32B){' - Batch' if use_batch else ''} ==={RESET}",
+            'slm': f"\n{QUICK_COLOR}=== Benchmarking SLM{' - Batch' if use_batch else ''} ==={RESET}",
+            'llm': f"\n{REFERENCE_COLOR}=== Benchmarking LLM{' - Batch' if use_batch else ''} ==={RESET}",
             'r2r': f"\n=== Benchmarking R2R Dynamic Mode{' - Batch' if use_batch else ''} ===",
         }
         print(header_map.get(model_type.lower(), f"\n=== Benchmarking {model_type} ==="))
