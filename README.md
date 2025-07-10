@@ -72,6 +72,17 @@ python script/evaluate/hf_dataset_sglang.py --dataset aime --router_path resourc
 
 Detailed configurations for benchmark datasets and evaluation metrics are available in `script/evaluate/eval_configs/dataset_configs.json`. Moreover, our default router_path and threshold settings are provided through `script/evaluate/eval_configs/r2r_configs.json`.
 
+For speed benchmark, run the following command:
+```bash
+# R2R speed benchmark
+python script/playground/speed_benchmark.py --test_r2r --router_path resource/default_router.pt
+# SLM/LLM speed benchmark
+python script/playground/speed_benchmark.py --test_slm
+python script/playground/speed_benchmark.py --test_llm
+# Batched R2R speed benchmark
+python script/playground/speed_benchmark.py --test_r2r --test_batch --router_path resource/default_router.pt 
+```
+
 ### 3. 🧪 Train Your Own R2R Router
 
 To train a custom R2R router for any LLM-SLM pair, you need to:
@@ -104,6 +115,13 @@ Generate responses using a large language model (default: `DeepSeek-R1-Distill-Q
 python script/data_labeling/step_0_llm_response.py --model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --dataset_path output/query_dataset --output_dir output/query_dataset/LLM_response --tp_size 2
 ```
 We recommend using complete LLM responses within the 32K token limit for subsequent processing, saved under the `datasets_finished/` folder. Alternatively, to use the pre-processed dataset, passing `--dataset_path nics-efc/R2R_query --use_hf_dataset` in the instruction above.
+For faster and tunable inference, generate responses using SGLang API server:
+```bash
+# Start SGLang server
+python -m sglang.launch_server --model-path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --tp 2
+# Run api inference
+python script/data_labeling/step_0_llm_response_api.py --api_url http://localhost:30000/v1 --model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --dataset_path output/query_dataset --output_dir output/query_dataset/LLM_response
+```
 
 ##### Step 1: SLM Prefill Analysis
 
