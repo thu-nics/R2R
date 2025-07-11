@@ -91,6 +91,8 @@ To train a custom R2R router for any LLM-SLM pair, you need to:
 1. Prepare a model preference label dataset
 2. Train the router using that dataset
 
+> 💡 Remember to edit `r2r/utils/model_configs.json` according to your training setup before running the following steps.
+
 #### 3.1 Dataset Preparation
 
 We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow these steps to create your own dataset.
