@@ -171,13 +171,13 @@ class NeuralSwitching(ModelSwitchingStrategy):
     """Neural network-based switching using a trained critical case classifier"""
 
     def __init__(
-        self, model_path, threshold: Optional[float] = None, device: str = "cuda"
+        self, model_path, threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32
     ):
         super().__init__()
         self.device = device
-
+        self.dtype = dtype
         # Load model using the load_model function from classifier.py
-        self.model, model_config = load_model(model_path, device=self.device)
+        self.model, model_config = load_model(model_path, device=self.device, dtype=self.dtype)
 
         # Use saved optimal threshold if available in common_args
         if threshold is None:

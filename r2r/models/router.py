@@ -109,6 +109,7 @@ def create_classifier(model_arch: str, **kwargs) -> nn.Module:
     Returns:
         An instance of the appropriate classifier
     """
+
     # First, check if input_type is directly in the registry (exact match)
     if model_arch in MODEL_REGISTRY:
         return MODEL_REGISTRY[model_arch](**kwargs)
@@ -235,7 +236,7 @@ def save_model(
     )
 
 
-def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Module, dict]:
+def load_model(model_path: str, device: str = "cuda", dtype=torch.float32, **kwargs) -> tuple[nn.Module, dict]:
     """
     Load a model from a saved file.
 
@@ -275,7 +276,7 @@ def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Modu
     else:
         raise ValueError("State dict is not found in the model configuration")
 
-    model = model.to(device)
+    model = model.to(device=device, dtype=dtype)
 
     # Return model and all config parameters
     return model, {
@@ -299,29 +300,27 @@ class ClassifierBlock(nn.Module):
         input_dim,
         output_dim,
         expansion_factor=4,
-        dropout_rate=0.3,
-        dtype=torch.float32
+        dropout_rate=0.3
     ):
         super().__init__()
-        self.dtype = dtype
         self.input_dim = input_dim
         self.output_dim = output_dim
         
         # Pre-layer normalization
-        self.layer_norm = nn.LayerNorm(input_dim, dtype=dtype)
+        self.layer_norm = nn.LayerNorm(input_dim)
         
         # MLP with expansion
         self.mlp = nn.Sequential(
-            nn.Linear(input_dim, input_dim * expansion_factor, dtype=dtype),
+            nn.Linear(input_dim, input_dim * expansion_factor),
             nn.GELU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(input_dim * expansion_factor, output_dim, dtype=dtype),
+            nn.Linear(input_dim * expansion_factor, output_dim),
             nn.Dropout(dropout_rate),
         )
         
         # Dimension change projection if needed
         self.dim_change = (
-            nn.Linear(input_dim, output_dim, dtype=dtype)
+            nn.Linear(input_dim, output_dim)
             if input_dim != output_dim
             else nn.Identity()
         )
@@ -350,18 +349,16 @@ class ClassifierBackbone(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
     ):
         super().__init__()
-        self.dtype = dtype
         self.use_position_embedding = use_position_embedding
         
         if self.use_position_embedding:
             # Generate sinusoidal position encoding and register as buffer
             position_embedding = get_sinusoidal_position_embedding(
-                max_position_embeddings, hidden_dims[0], dtype=dtype
+                max_position_embeddings, hidden_dims[0]
             )
             self.register_buffer("position_embedding", position_embedding)
         
@@ -369,7 +366,7 @@ class ClassifierBackbone(nn.Module):
         self.blocks = nn.ModuleList()
         
         # First projection to match the first hidden dimension
-        self.input_projection = nn.Linear(input_dim, hidden_dims[0], dtype=dtype)
+        self.input_projection = nn.Linear(input_dim, hidden_dims[0])
         
         block_dims = hidden_dims + [hidden_dims[-1]] # for the last block, the output dimension is the same as the input dimension
 
@@ -387,14 +384,13 @@ class ClassifierBackbone(nn.Module):
                     output_dim=block_output_dim,
                     expansion_factor=expansion_factor,
                     dropout_rate=dropout_rate,
-                    dtype=dtype
                 )
             )
         
         # Output layer
         self.output_layer = nn.Sequential(
-            nn.LayerNorm(hidden_dims[-1], dtype=dtype),
-            nn.Linear(hidden_dims[-1], output_dim, dtype=dtype),
+            nn.LayerNorm(hidden_dims[-1]),
+            nn.Linear(hidden_dims[-1], output_dim),
         )
         
         # Initialize weights
@@ -465,17 +461,15 @@ class LogitsClassifier(nn.Module):
         hidden_dims=[256, 512, 256],
         expansion_factor=4,
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
     ):
         super().__init__()
-        self.dtype = dtype
         self.normalize_input = normalize_input
         
         # Input projection for logits
-        self.logits_projection = nn.Linear(logits_size, hidden_dims[0], dtype=dtype)
+        self.logits_projection = nn.Linear(logits_size, hidden_dims[0])
         
         # Create backbone
         self.backbone = ClassifierBackbone(
@@ -484,7 +478,6 @@ class LogitsClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -500,8 +493,6 @@ class LogitsClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Project logits
-        logits = logits.to(dtype=self.dtype)
         
         # Apply softmax normalization if enabled
         if self.normalize_input:
@@ -527,22 +518,20 @@ class HiddenStatesClassifier(nn.Module):
         hidden_dims=[256, 512, 256],
         expansion_factor=4,
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
     ):
         super().__init__()
-        self.dtype = dtype
         self.normalize_input = normalize_input
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm = nn.LayerNorm(hidden_states_size)
         
         # Input projection for hidden states
         self.hidden_states_projection = nn.Linear(
-            hidden_states_size, hidden_dims[0], dtype=dtype
+            hidden_states_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -552,7 +541,6 @@ class HiddenStatesClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -568,8 +556,6 @@ class HiddenStatesClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Project hidden states
-        hidden_states = hidden_states.to(dtype=self.dtype)
         
         # Apply layer normalization if enabled
         if self.normalize_input:
@@ -597,7 +583,6 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
@@ -605,14 +590,13 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
         normalize_input=False,
     ):  # Add topk parameter
         super().__init__()
-        self.dtype = dtype
         self.topk = topk  # Store topk parameter
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm = nn.LayerNorm(hidden_states_size)
         
         # Copy weights from a pretrained LM head
         try:
@@ -628,18 +612,18 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
             
             # Create LM head with pretrained weights
             self.lm_head = nn.Linear(
-                hidden_states_size, lm_head_weight.shape[0], dtype=dtype
+                hidden_states_size, lm_head_weight.shape[0]
             )
             with torch.no_grad():
-                self.lm_head.weight.copy_(lm_head_weight.to(dtype=dtype))
+                self.lm_head.weight.copy_(lm_head_weight)
                 if lm_head_bias is not None:
-                    self.lm_head.bias.copy_(lm_head_bias.to(dtype=dtype))
+                    self.lm_head.bias.copy_(lm_head_bias)
             
             print(f"Successfully copied weights from {pretrained_model_name} LM head")
         except Exception as e:
             print(f"Failed to load pretrained model: {e}")
             # Fallback to random initialization
-            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0], dtype=dtype)
+            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0])
             print(f"Using randomly initialized LM head")
         
         # Post-LM projection - adjust input size based on whether we're using topk
@@ -647,7 +631,7 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
             self.topk if self.topk is not None else self.lm_head.out_features
         )
         self.post_lm_projection = nn.Linear(
-            post_lm_input_size, hidden_dims[0], dtype=dtype
+            post_lm_input_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -657,7 +641,6 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -683,7 +666,7 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
             Model output (logits)
         """
         # Process hidden states through LM head
-        hidden_states = hidden_states.to(dtype=self.dtype)
+        hidden_states = hidden_states
         
         # Apply layer normalization if enabled
         if self.normalize_input:
@@ -720,7 +703,6 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
@@ -729,7 +711,6 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
         freeze_lm_head=False,
     ):  # Add topk parameter
         super().__init__()
-        self.dtype = dtype
         self.topk = topk  # Store topk parameter
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
@@ -737,8 +718,8 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size, dtype=dtype)
-            self.layer_norm_token = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size)
+            self.layer_norm_token = nn.LayerNorm(hidden_states_size)
         
         # Copy weights from a pretrained LM head
         try:
@@ -753,10 +734,9 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
             self.token_embeddings = nn.Embedding(
                 embedding_layer.num_embeddings,
                 embed_dim,
-                dtype=dtype
             )
             with torch.no_grad():     
-                self.token_embeddings.weight.copy_(embedding_layer.weight.to(dtype=dtype))
+                self.token_embeddings.weight.copy_(embedding_layer.weight)
             
             print(f"Successfully copied weights from {pretrained_model_name} LM head and embeddings")
         except Exception as e:
@@ -773,7 +753,7 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
         # Combined projection for hidden states + token embeddings
         combined_size = hidden_states_size + embed_dim
         self.combined_projection = nn.Linear(
-            combined_size, hidden_dims[0], dtype=dtype
+            combined_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -783,7 +763,6 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -809,11 +788,9 @@ class HiddenStatesTokenLMHeadClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Process hidden states
-        hidden_states = hidden_states.to(dtype=self.dtype)
         
         # Get token embeddings
-        token_embeddings = self.token_embeddings(token).to(dtype=self.dtype)
+        token_embeddings = self.token_embeddings(token)
 
         # Apply layer normalization if enabled
         if self.normalize_input:
@@ -846,7 +823,6 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
@@ -855,7 +831,6 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
         freeze_lm_head=False,
     ):
         super().__init__()
-        self.dtype = dtype
         self.topk = topk  # Store topk parameter
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
@@ -863,8 +838,8 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
         
         # Layer normalization for inputs if normalization is enabled
         if self.normalize_input:
-            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size, dtype=dtype)
-            self.layer_norm_token = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size)
+            self.layer_norm_token = nn.LayerNorm(hidden_states_size)
             # No layer norm for logits as we'll apply softmax instead if normalize_input is True
         
         # Copy weights from a pretrained LM head
@@ -879,11 +854,10 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
 
             self.token_embeddings = nn.Embedding(
                 embedding_layer.num_embeddings,
-                embed_dim,
-                dtype=dtype
+                embed_dim
             )
             with torch.no_grad():     
-                self.token_embeddings.weight.copy_(embedding_layer.weight.to(dtype=dtype))
+                self.token_embeddings.weight.copy_(embedding_layer.weight)
             
             print(f"Successfully copied weights from {pretrained_model_name} embeddings")
         except Exception as e:
@@ -898,12 +872,12 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
             self.token_embeddings.weight.requires_grad = False
         
         # Projection for logits
-        self.logits_projection = nn.Linear(logits_size, hidden_states_size, dtype=dtype)
+        self.logits_projection = nn.Linear(logits_size, hidden_states_size)
         
         # Combined projection for hidden states + token embeddings + logits projection
         combined_size = hidden_states_size + embed_dim + hidden_states_size
         self.combined_projection = nn.Linear(
-            combined_size, hidden_dims[0], dtype=dtype
+            combined_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -913,7 +887,6 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -938,12 +911,9 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Process inputs to correct dtype
-        hidden_states = hidden_states.to(dtype=self.dtype)
-        logits = logits.to(dtype=self.dtype)
         
         # Get token embeddings
-        token_embeddings = self.token_embeddings(token).to(dtype=self.dtype)
+        token_embeddings = self.token_embeddings(token)
 
         # Apply normalization if enabled
         if self.normalize_input:
@@ -980,7 +950,6 @@ class HiddenStatesLogitsClassifier(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         
@@ -988,24 +957,23 @@ class HiddenStatesLogitsClassifier(nn.Module):
         freeze_lm_head=False,
     ):
         super().__init__()
-        self.dtype = dtype
         
         self.normalize_input = normalize_input
         self.freeze_lm_head = freeze_lm_head
         
         # Layer normalization for inputs if normalization is enabled
         if self.normalize_input:
-            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size)
             # No layer norm for logits as we'll apply softmax instead if normalize_input is True
        
         
         # Projection for logits
-        self.logits_projection = nn.Linear(logits_size, hidden_states_size, dtype=dtype)
+        self.logits_projection = nn.Linear(logits_size, hidden_states_size)
         
         # Combined projection for hidden states +  logits projection
         combined_size = hidden_states_size + hidden_states_size
         self.combined_projection = nn.Linear(
-            combined_size, hidden_dims[0], dtype=dtype
+            combined_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -1015,12 +983,11 @@ class HiddenStatesLogitsClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
 
-    def forward(self, hidden_states, logits=None, position_ids=None):
+    def forward(self, hidden_states, logits, position_ids=None):
         """
         Forward pass through the model.
         
@@ -1032,10 +999,6 @@ class HiddenStatesLogitsClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Process inputs to correct dtype
-        hidden_states = hidden_states.to(dtype=self.dtype)
-        logits = logits.to(dtype=self.dtype)
-
         # Apply normalization if enabled
         if self.normalize_input:
             hidden_states = self.layer_norm_hidden_states(hidden_states)
@@ -1069,7 +1032,6 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
@@ -1078,15 +1040,14 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
     ):  # Add topk parameter
         super().__init__()
         raise NotImplementedError("This model is not implemented yet")
-        self.dtype = dtype
         self.topk = topk  # Store topk parameter
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size, dtype=dtype)
-            self.layer_norm_token = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size)
+            self.layer_norm_token = nn.LayerNorm(hidden_states_size)
         
         # Copy weights from a pretrained LM head
         try:
@@ -1108,23 +1069,22 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
 
             self.token_embeddings = nn.Embedding(
                 embedding_layer.num_embeddings,
-                embed_dim,
-                dtype=dtype
+                embed_dim
             )
             self.lm_head = nn.Linear(
-                hidden_states_size, lm_head_weight.shape[0], dtype=dtype
+                hidden_states_size, lm_head_weight.shape[0]
             )
             with torch.no_grad():
-                self.lm_head.weight.copy_(lm_head_weight.to(dtype=dtype))
+                self.lm_head.weight.copy_(lm_head_weight)
                 if lm_head_bias is not None:
-                    self.lm_head.bias.copy_(lm_head_bias.to(dtype=dtype))            
-                self.token_embeddings.weight.copy_(embedding_layer.weight.to(dtype=dtype))
+                    self.lm_head.bias.copy_(lm_head_bias)            
+                self.token_embeddings.weight.copy_(embedding_layer.weight)
             
             print(f"Successfully copied weights from {pretrained_model_name} LM head and embeddings")
         except Exception as e:
             print(f"Failed to load pretrained model: {e}")
             # Fallback to random initialization
-            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0], dtype=dtype)
+            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0])
             # Create a simple embedding layer as fallback
             vocab_size = 50257  # Default GPT-2 vocab size
             embed_dim = hidden_dims[0]
@@ -1136,13 +1096,13 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
             self.topk if self.topk is not None else self.lm_head.out_features
         )
         self.post_lm_projection = nn.Linear(
-            post_lm_input_size, hidden_dims[0], dtype=dtype
+            post_lm_input_size, hidden_dims[0]
         )
         
         # Combined projection for hidden states + token embeddings
         combined_size = hidden_states_size + embed_dim
         self.combined_projection = nn.Linear(
-            combined_size, hidden_dims[0], dtype=dtype
+            combined_size, hidden_dims[0]
         )
         
         # Create backbone
@@ -1151,7 +1111,6 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -1177,11 +1136,9 @@ class HiddenStatesTokenClassifierWithLMHead(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Process hidden states
-        hidden_states = hidden_states.to(dtype=self.dtype)
         
         # Get token embeddings
-        token_embeddings = self.token_embeddings(token).to(dtype=self.dtype)
+        token_embeddings = self.token_embeddings(token)
 
         # Apply layer normalization if enabled
         if self.normalize_input:
@@ -1216,18 +1173,16 @@ class MultiLogitsClassifier(nn.Module):
         expansion_factor=4,  # Transformer-style expansion
         neural_window_size=3,  # Number of tokens to consider for classification
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
     ):
         super().__init__()
-        self.dtype = dtype
         self.neural_window_size = neural_window_size
         self.normalize_input = normalize_input
         
         # Input projection for logits
-        self.logits_projection = nn.Linear(logits_size, hidden_dims[0], dtype=dtype)
+        self.logits_projection = nn.Linear(logits_size, hidden_dims[0])
         
         # Create backbone
         self.backbone = ClassifierBackbone(
@@ -1236,7 +1191,6 @@ class MultiLogitsClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -1252,8 +1206,6 @@ class MultiLogitsClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Project logits
-        logits = logits.to(dtype=self.dtype)
         
         # Apply softmax normalization if enabled
         if self.normalize_input:
@@ -1293,23 +1245,21 @@ class MultiHiddenStatesClassifier(nn.Module):
         expansion_factor=4,  # Transformer-style expansion
         neural_window_size=3,  # Number of tokens to consider for classification
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
     ):
         super().__init__()
-        self.dtype = dtype
         self.neural_window_size = neural_window_size
         self.normalize_input = normalize_input
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm = nn.LayerNorm(hidden_states_size)
 
         # Input projection for hidden states
         self.hidden_states_projection = nn.Linear(
-            hidden_states_size, hidden_dims[0], dtype=dtype
+            hidden_states_size, hidden_dims[0]
         )
 
         # Create backbone
@@ -1319,7 +1269,6 @@ class MultiHiddenStatesClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
         )
@@ -1335,8 +1284,6 @@ class MultiHiddenStatesClassifier(nn.Module):
         Returns:
             Model output (logits)
         """
-        # Process hidden states
-        hidden_states = hidden_states.to(dtype=self.dtype)
         
         # Apply layer normalization if enabled
         if self.normalize_input:
@@ -1613,25 +1560,23 @@ class MultiClassClassifierBackbone(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         apply_softmax=True,  # Whether to apply softmax at the output
     ):
         super().__init__()
-        self.dtype = dtype
         self.use_position_embedding = use_position_embedding
         self.apply_softmax = apply_softmax
         
         if self.use_position_embedding:
             # Generate sinusoidal position encoding and register as buffer
             position_embedding = get_sinusoidal_position_embedding(
-                max_position_embeddings, hidden_dims[0], dtype=dtype
+                max_position_embeddings, hidden_dims[0]
             )
             self.register_buffer("position_embedding", position_embedding)
         
         # First projection to match the first hidden dimension
-        self.input_projection = nn.Linear(input_dim, hidden_dims[0], dtype=dtype)
+        self.input_projection = nn.Linear(input_dim, hidden_dims[0])
         
         # Create transformer blocks with the new ClassifierBlock
         self.blocks = nn.ModuleList()
@@ -1649,21 +1594,20 @@ class MultiClassClassifierBackbone(nn.Module):
                     output_dim=block_output_dim,
                     expansion_factor=expansion_factor,
                     dropout_rate=dropout_rate,
-                    dtype=dtype
                 )
             )
         
         # Output layer for multi-class classification
         if self.apply_softmax:
             self.output_layer = nn.Sequential(
-                nn.LayerNorm(hidden_dims[-1], dtype=dtype),
-                nn.Linear(hidden_dims[-1], output_dim, dtype=dtype),
+                nn.LayerNorm(hidden_dims[-1]),
+                nn.Linear(hidden_dims[-1], output_dim),
                 nn.Softmax(dim=-1)
             )
         else:
             self.output_layer = nn.Sequential(
-                nn.LayerNorm(hidden_dims[-1], dtype=dtype),
-                nn.Linear(hidden_dims[-1], output_dim, dtype=dtype)
+                nn.LayerNorm(hidden_dims[-1]),
+                nn.Linear(hidden_dims[-1], output_dim)
             )
             
     def apply_position_embedding(self, x, position_ids=None):
@@ -1723,19 +1667,17 @@ class MultiClassLogitsClassifier(nn.Module):
         hidden_dims=[256, 512, 256],
         expansion_factor=4,
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
         apply_softmax=True,
     ):
         super().__init__()
-        self.dtype = dtype
         self.normalize_input = normalize_input
         self.num_classes = num_classes
         
         # Input projection for logits
-        self.logits_projection = nn.Linear(logits_size, hidden_dims[0], dtype=dtype)
+        self.logits_projection = nn.Linear(logits_size, hidden_dims[0])
         
         # Create multi-class backbone
         self.backbone = MultiClassClassifierBackbone(
@@ -1744,7 +1686,6 @@ class MultiClassLogitsClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
             apply_softmax=apply_softmax,
@@ -1764,24 +1705,22 @@ class MultiClassHiddenStatesClassifier(nn.Module):
         hidden_dims=[256, 512, 256],
         expansion_factor=4,
         dropout_rate=0.3,
-        dtype=torch.float32,
         use_position_embedding=False,
         max_position_embeddings=1024,
         normalize_input=False,
         apply_softmax=True,
     ):
         super().__init__()
-        self.dtype = dtype
         self.normalize_input = normalize_input
         self.num_classes = num_classes
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm = nn.LayerNorm(hidden_states_size)
         
         # Input projection for hidden states
         self.hidden_states_projection = nn.Linear(
-            hidden_states_size, hidden_dims[0], dtype=dtype
+            hidden_states_size, hidden_dims[0]
         )
         
         # Create multi-class backbone
@@ -1791,7 +1730,6 @@ class MultiClassHiddenStatesClassifier(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
             apply_softmax=apply_softmax,
@@ -1813,7 +1751,6 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
         hidden_dims=[256, 512, 256],  # Bottleneck structure
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
-        dtype=torch.float32,
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
@@ -1822,7 +1759,6 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
         apply_softmax=True,
     ):
         super().__init__()
-        self.dtype = dtype
         self.topk = topk  # Store topk parameter
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
@@ -1830,7 +1766,7 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
         
         # Layer normalization for hidden states if normalization is enabled
         if self.normalize_input:
-            self.layer_norm = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            self.layer_norm = nn.LayerNorm(hidden_states_size)
         
         # Copy weights from a pretrained LM head
         try:
@@ -1848,18 +1784,18 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
             
             # Create LM head with pretrained weights
             self.lm_head = nn.Linear(
-                hidden_states_size, lm_head_weight.shape[0], dtype=dtype
+                hidden_states_size, lm_head_weight.shape[0]
             )
             with torch.no_grad():
-                self.lm_head.weight.copy_(lm_head_weight.to(dtype=dtype))
+                self.lm_head.weight.copy_(lm_head_weight)
                 if lm_head_bias is not None:
-                    self.lm_head.bias.copy_(lm_head_bias.to(dtype=dtype))
+                    self.lm_head.bias.copy_(lm_head_bias)
             
             print(f"Successfully copied weights from {pretrained_model_name} LM head")
         except Exception as e:
             print(f"Failed to load pretrained model: {e}")
             # Fallback to random initialization
-            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0], dtype=dtype)
+            self.lm_head = nn.Linear(hidden_states_size, hidden_dims[0])
             print(f"Using randomly initialized LM head")
         
         # Post-LM projection - adjust input size based on whether we're using topk
@@ -1867,7 +1803,7 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
             self.topk if self.topk is not None else self.lm_head.out_features
         )
         self.post_lm_projection = nn.Linear(
-            post_lm_input_size, hidden_dims[0], dtype=dtype
+            post_lm_input_size, hidden_dims[0]
         )
         
         # Create multi-class backbone
@@ -1877,7 +1813,6 @@ class MultiClassHiddenStatesClassifierWithLMHead(nn.Module):
             hidden_dims=hidden_dims,
             expansion_factor=expansion_factor,
             dropout_rate=dropout_rate,
-            dtype=dtype,
             use_position_embedding=use_position_embedding,
             max_position_embeddings=max_position_embeddings,
             apply_softmax=apply_softmax,
