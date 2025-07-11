@@ -984,13 +984,13 @@ class HiddenStatesLogitsClassifier(nn.Module):
         pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
-        topk=None,
+        
         normalize_input=False,
         freeze_lm_head=False,
     ):
         super().__init__()
         self.dtype = dtype
-        self.topk = topk  # Store topk parameter
+        
         self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
         self.freeze_lm_head = freeze_lm_head
@@ -1005,7 +1005,7 @@ class HiddenStatesLogitsClassifier(nn.Module):
         self.logits_projection = nn.Linear(logits_size, hidden_states_size, dtype=dtype)
         
         # Combined projection for hidden states +  logits projection
-        combined_size = hidden_states_size +  hidden_states_size
+        combined_size = hidden_states_size + hidden_states_size
         self.combined_projection = nn.Linear(
             combined_size, hidden_dims[0], dtype=dtype
         )
@@ -1022,7 +1022,7 @@ class HiddenStatesLogitsClassifier(nn.Module):
             max_position_embeddings=max_position_embeddings,
         )
 
-    def forward(self, hidden_states, token=None, logits=None, position_ids=None):
+    def forward(self, hidden_states, logits=None, position_ids=None):
         """
         Forward pass through the model.
         
