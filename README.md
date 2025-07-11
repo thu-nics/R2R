@@ -1,12 +1,14 @@
 # R2R: Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing
 
-**[[arXiv](https://arxiv.org/abs/2505.21600)]** **[[project page](https://fuvty.github.io/R2R_Project_Page/)]**
+<p align="center">
+🌐 <a href="https://fuvty.github.io/R2R_Project_Page/"><b>Project Page</b></a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://arxiv.org/abs/2505.21600"><b>arXiv</b></a>&nbsp&nbsp | &nbsp&nbsp🤗 <a href="https://huggingface.co/papers/2505.21600"><b>HuggingFace</b></a>
+</p>
 
-Roads to Rome (R2R) is a neural token router that efficiently combines Large Language Models (LLMs) and Small Language Models (SLMs) by selectively routing only critical, reasoning-divergent tokens to the large model. 
+Roads to Rome (R2R) intelligently combines small and large language models by routing **only critical, reasoning-divergent tokens to the large model**.
 
-By combining DeepSeek's R1-1.5B and R1-32B models, R2R-5.6B achieves a 2.8× speedup over R1-32B while surpassing R1-7B and R1-14B by 1.6× and 1.1× in accuracy on challenging math, coding, and QA benchmarks.
+https://github.com/user-attachments/assets/382fabd8-a816-44ba-b100-b8dd047c3bcb
 
-⭐ **Feel free to star this repo or cite our paper if you find it useful!**
+By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× speedup** over R1-32B while **surpassing R1-7B and R1-14B by 1.6× and 1.1×** in accuracy on challenging math, coding, and QA benchmarks.
 
 ```bibtex
 @article{fu2025r2r,
@@ -16,6 +18,8 @@ By combining DeepSeek's R1-1.5B and R1-32B models, R2R-5.6B achieves a 2.8× spe
     year={2025},
 }
 ```
+
+⭐ **Feel free to star this repo or cite our paper if you find it useful!**
 
 ## 📰 News
 

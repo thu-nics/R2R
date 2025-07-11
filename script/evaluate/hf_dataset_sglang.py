@@ -403,9 +403,9 @@ def evaluate_problem(
 ) -> List[Dict]:
     """Evaluate a batch of problems using data parallelism."""
     # Check if repeat_input_num equals batch_size
-    if args.repeat_input_num > 1:   
-        if args.repeat_input_num != batch_size:
-            raise ValueError(f"repeat_input_num ({args.repeat_input_num}) must equal batch_size ({batch_size})")
+    # if args.repeat_input_num > 1:   
+    #     if args.repeat_input_num != batch_size:
+    #         raise ValueError(f"repeat_input_num ({args.repeat_input_num}) must equal batch_size ({batch_size})")
     
     # Get the appropriate answer extractor for this dataset
     answer_type = dataset_config.get("answer_type", "boxed")
@@ -657,12 +657,14 @@ def combine_results(output_dir: str) -> Dict:
     combined_df = pd.concat(result_files, ignore_index=True)
     
     # Sort by timestamp (latest first) and keep first occurrence of each problem_id per model
+    # combined_df = (combined_df
+    #               .sort_values('timestamp', ascending=False)
+    #               .groupby(['problem_id', 'model_name'])
+    #               .first()
+    #               .reset_index())
     combined_df = (combined_df
                   .sort_values('timestamp', ascending=False)
-                  .groupby(['problem_id', 'model_name'])
-                  .first()
                   .reset_index())
-    
     # Ensure token columns are included in the combined results
     # If any result file has these columns, they should be preserved
     essential_columns = ['input_tokens', 'output_tokens', 'total_tokens']
@@ -900,6 +902,133 @@ def extract_results_from_temp_csvs(output_dir: str,use_job_dirs: bool = True):
     print(f"Combined results saved to {output_path}")
     print(f"Total number of problems: {len(combined_df)}")
 
+def print_evaluation_metrics(args: argparse.Namespace, output_dir: str, all_problems: List[Dict], completed_problems: set):
+    """Print comprehensive evaluation metrics for all dataset types.
+    
+    Args:
+        args: Command line arguments
+        output_dir: Directory containing the results
+        all_problems: List of all problems in the dataset
+        completed_problems: Set of completed problem IDs
+    """
+    print("\n" + "="*80)
+    print("EVALUATION METRICS SUMMARY")
+    print("="*80)
+    
+    # Basic statistics
+    print(f"Dataset: {args.dataset}")
+    print(f"Model: {args.model_path}")
+    print(f"Total problems in dataset: {len(all_problems)}")
+    
+    # Load and analyze combined results if available
+    combined_results_path = os.path.join(output_dir, "combined_results.csv")
+    if os.path.exists(combined_results_path):
+        try:
+            df = pd.read_csv(combined_results_path)
+            print(f"\nResults analyzed from: {len(df)} completed problems")
+            
+            # Basic accuracy metrics
+            print("\n ACCURACY METRICS:")
+            print("-" * 40)
+            if 'has_extracted_answer' in df.columns:
+                extraction_rate = df['has_extracted_answer'].mean() * 100
+                print(f"Answer extraction rate: {extraction_rate:.2f}%")
+            
+            if 'is_correct' in df.columns:
+                overall_accuracy = df['is_correct'].mean() * 100
+                print(f"Overall accuracy: {overall_accuracy:.2f}%")
+            
+            # Pass@1 metrics (if repeat_input_num > 1)
+            if args.repeat_input_num > 1 and 'is_correct' in df.columns:
+                print(f"\n PASS@1 METRICS (repeat_input_num={args.repeat_input_num}):")
+                print("-" * 40)
+                
+                # Calculate pass@1 as overall accuracy across all attempts
+                overall_correct_count = df['is_correct'].sum()
+                total_attempts = len(df)
+                pass_at_1_rate = (overall_correct_count / total_attempts) * 100
+                
+                print(f"Pass@1: {pass_at_1_rate:.2f}% ({overall_correct_count}/{total_attempts})")
+                
+                # Additional statistics for repeated attempts
+                grouped = df.groupby('problem_id')['is_correct']
+                total_problems = len(grouped)
+                attempts_per_problem = grouped.size()
+                avg_attempts = attempts_per_problem.mean()
+                print(f"Average attempts per problem: {avg_attempts:.1f}")
+                print(f"Total problems: {total_problems}")
+                
+                # Show distribution of correct attempts per problem
+                correct_per_problem = grouped.sum()
+                print(f"Problems with 0 correct: {(correct_per_problem == 0).sum()}")
+                print(f"Problems with all correct: {(correct_per_problem == args.repeat_input_num).sum()}")
+                if args.repeat_input_num > 2:
+                    print(f"Problems with partial correct: {((correct_per_problem > 0) & (correct_per_problem < args.repeat_input_num)).sum()}")
+            
+            # Token usage metrics
+            print("\n TOKEN USAGE METRICS:")
+            print("-" * 40)
+            if 'input_tokens' in df.columns:
+                avg_input_tokens = df['input_tokens'].mean()
+                print(f"Average input tokens: {avg_input_tokens:.0f}")
+            
+            if 'output_tokens' in df.columns:
+                avg_output_tokens = df['output_tokens'].mean()
+                print(f"Average output tokens: {avg_output_tokens:.0f}")
+            
+            if 'total_tokens' in df.columns:
+                avg_total_tokens = df['total_tokens'].mean()
+                total_token_sum = df['total_tokens'].sum()
+                print(f"Average total tokens: {avg_total_tokens:.0f}")
+                print(f"Total tokens used: {total_token_sum:,}")
+            
+            # Performance metrics
+            print("\n PERFORMANCE METRICS:")
+            # Hybrid model metrics (if available)
+            if 'quick_model_percentage' in df.columns:
+                print("\n HYBRID MODEL METRICS:")
+                print("-" * 40)
+                avg_quick_percentage = df['quick_model_percentage'].mean()
+                avg_ref_percentage = df['reference_model_percentage'].mean()
+                print(f"Quick model usage: {avg_quick_percentage:.1f}%")
+                print(f"Reference model usage: {avg_ref_percentage:.1f}%")
+                
+                if 'model_agreement_percentage' in df.columns:
+                    avg_agreement = df['model_agreement_percentage'].mean()
+                    print(f"Model agreement rate: {avg_agreement:.1f}%")
+                
+                if 'avg_params_billions' in df.columns:
+                    avg_params = df['avg_params_billions'].mean()
+                    print(f"Average parameters per token: {avg_params:.2f}B")
+                
+                # Calculate LLM output token ratio
+                if 'output_tokens' in df.columns and 'input_tokens' in df.columns:
+                    # Calculate LLM (reference model) generated tokens for each response
+                    df['llm_generated_tokens'] = df['reference_model_percentage'] / 100.0 * (df['output_tokens'] - df['input_tokens'])
+                    df['total_generated_tokens'] = df['output_tokens'] - df['input_tokens']
+                    
+                    # Calculate total LLM tokens and total generated tokens
+                    total_llm_tokens = df['llm_generated_tokens'].sum()
+                    total_generated_tokens = df['total_generated_tokens'].sum()
+                    
+                    # Calculate ratio
+                    if total_generated_tokens > 0:
+                        llm_token_ratio = (total_llm_tokens / total_generated_tokens) * 100
+                        print(f"LLM output token ratio: {llm_token_ratio:.2f}%")
+                        print(f"Total LLM generated tokens: {total_llm_tokens:.0f}")
+                        print(f"Total generated tokens: {total_generated_tokens:.0f}")
+                    else:
+                        print("LLM output token ratio: N/A (no generated tokens)")
+        
+        except Exception as e:
+            print(f"\nWarning: Could not analyze combined results: {e}")
+    else:
+        print(f"\nNote: Combined results file not found at {combined_results_path}")
+    
+    print("\n" + "="*80)
+    print("END OF EVALUATION METRICS")
+    print("="*80)
+
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -974,6 +1103,9 @@ def main():
             print("Job ID -1: Combining results only, no processing")
             stats = combine_results(args.output_dir)
             
+            # Get completed problems for metrics
+            completed_problems = get_completed_problems(args.output_dir)
+            
             # Print summary
             print("\nProcessing Summary:")
             print(f"Total problems in dataset: {len(all_problems)}")
@@ -983,6 +1115,8 @@ def main():
                 stats_df = pd.DataFrame(stats, index=[0]).T
                 stats_df.to_csv(f"{args.output_dir}/stats.csv", index=False)
             
+            # Print comprehensive evaluation metrics
+            print_evaluation_metrics(args, args.output_dir, all_problems, completed_problems)
             return
         else:
             # Process only a subset of problems for this job
@@ -1013,7 +1147,6 @@ def main():
             
             print(f"\nJob {args.job_id} Processing Summary:")
             print(f"Problems processed in this job: {len(job_problems)}")
-            print(f"Total problems completed so far: {len(completed_problems)}")
             
             if len(completed_problems) < len(all_problems):
                 remaining = set(p['ID'] for p in all_problems) - completed_problems
@@ -1031,7 +1164,6 @@ def main():
         print("\nProcessing Summary:")
         print(f"Total problems in dataset: {len(all_problems)}")
         print(f"Problems processed this run: {len(problems)}")
-        print(f"Total problems completed: {len(completed_problems)}")
         
         if stats:
             print(stats)
@@ -1069,6 +1201,11 @@ def main():
             print(f"livecodebench results saved in {args.output_dir}/combined_results_evaluation_light.csv")
         else:
             print(f"combined_results.csv not found in {args.output_dir}")
+
+    # Print comprehensive evaluation metrics at the end
+    if not args.split_jobs or args.job_id == -1:
+        # Only print metrics for complete runs or when combining results
+        print_evaluation_metrics(args, args.output_dir, all_problems, completed_problems)
 
     # if args.resume:
     #     # run resume_hf_sglang_results.py to get the results

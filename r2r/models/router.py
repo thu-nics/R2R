@@ -966,6 +966,96 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
 
 @register_model
 @capture_init_args
+class HiddenStatesLogitsClassifier(nn.Module):
+    """
+    A classifier that uses a pretrained LM head for processing token and also takes logits as input.
+    This model accepts hidden states, sampled token, and logits as input.
+    Uses the ClassifierBackbone for processing.
+    """
+
+    def __init__(
+        self,
+        hidden_states_size=1536,
+        logits_size=100,
+        hidden_dims=[256, 512, 256],  # Bottleneck structure
+        expansion_factor=4,  # Transformer-style expansion
+        dropout_rate=0.3,
+        dtype=torch.float32,
+        use_position_embedding=False,
+        max_position_embeddings=1024,
+        
+        normalize_input=False,
+        freeze_lm_head=False,
+    ):
+        super().__init__()
+        self.dtype = dtype
+        
+        self.normalize_input = normalize_input
+        self.freeze_lm_head = freeze_lm_head
+        
+        # Layer normalization for inputs if normalization is enabled
+        if self.normalize_input:
+            self.layer_norm_hidden_states = nn.LayerNorm(hidden_states_size, dtype=dtype)
+            # No layer norm for logits as we'll apply softmax instead if normalize_input is True
+       
+        
+        # Projection for logits
+        self.logits_projection = nn.Linear(logits_size, hidden_states_size, dtype=dtype)
+        
+        # Combined projection for hidden states +  logits projection
+        combined_size = hidden_states_size + hidden_states_size
+        self.combined_projection = nn.Linear(
+            combined_size, hidden_dims[0], dtype=dtype
+        )
+        
+        # Create backbone
+        self.backbone = ClassifierBackbone(
+            input_dim=hidden_dims[0],
+            output_dim=1,
+            hidden_dims=hidden_dims,
+            expansion_factor=expansion_factor,
+            dropout_rate=dropout_rate,
+            dtype=dtype,
+            use_position_embedding=use_position_embedding,
+            max_position_embeddings=max_position_embeddings,
+        )
+
+    def forward(self, hidden_states, logits=None, position_ids=None):
+        """
+        Forward pass through the model.
+        
+        Args:
+            hidden_states: Tensor of hidden states [batch_size, hidden_dim]
+            logits: Tensor of logits [batch_size, logits_size]
+            position_ids: Optional tensor of position ids for position embeddings
+            
+        Returns:
+            Model output (logits)
+        """
+        # Process inputs to correct dtype
+        hidden_states = hidden_states.to(dtype=self.dtype)
+        logits = logits.to(dtype=self.dtype)
+
+        # Apply normalization if enabled
+        if self.normalize_input:
+            hidden_states = self.layer_norm_hidden_states(hidden_states)
+            logits = torch.nn.functional.softmax(logits, dim=-1)
+        
+        # Process logits
+        logits_features = self.logits_projection(logits)
+        
+        # Concatenate all features
+        combined_features = torch.cat([hidden_states,  logits_features], dim=-1)
+        
+        # Project the combined features
+        x = self.combined_projection(combined_features)
+
+        # Process through backbone
+        return self.backbone(x, position_ids)
+
+
+@register_model
+@capture_init_args
 class HiddenStatesTokenClassifierWithLMHead(nn.Module):
     """
     A classifier that uses a pretrained LM head for processing hidden states and token.
