@@ -122,7 +122,7 @@ For faster and tunable inference, generate responses using SGLang API server:
 ```bash
 # Start SGLang server
 python -m sglang.launch_server --model-path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --tp 2
-# Run api inference
+# Run API inference
 python script/data_labeling_api/step_0_llm_response.py --api_url http://localhost:30000/v1 --model_path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --dataset_path output/query_dataset --output_dir output/query_dataset/LLM_response --max_concurrent_requests 16
 ```
 
@@ -145,6 +145,15 @@ python script/data_labeling/step_2_llm_continuation.py --input_path output/query
 ```
 
 > **Note**: To use different models or loading path, edit the configuration in `r2r/utils/config.py`
+
+To speedup the process, use API inference instead:
+
+```bash
+# Start SGLang server
+python -m sglang.launch_server --model-path deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --tp 2 --skip-tokenizer-init --enable-custom-logit-processor
+# Run API inference
+python script/data_labeling_api/step_2_llm_continuation.py --input_path output/query_dataset/LLM_response/SLM_prefill/prediction_comparison.csv --output_path output/query_dataset/LLM_response/SLM_prefill/LLM_continuation_verify --max_concurrent_requests 32
+```
 
 ##### Step 3: Verify
 
