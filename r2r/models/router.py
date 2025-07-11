@@ -981,7 +981,6 @@ class HiddenStatesLogitsClassifier(nn.Module):
         expansion_factor=4,  # Transformer-style expansion
         dropout_rate=0.3,
         dtype=torch.float32,
-        pretrained_model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         use_position_embedding=False,
         max_position_embeddings=1024,
         
@@ -991,7 +990,6 @@ class HiddenStatesLogitsClassifier(nn.Module):
         super().__init__()
         self.dtype = dtype
         
-        self.pretrained_model_name = pretrained_model_name
         self.normalize_input = normalize_input
         self.freeze_lm_head = freeze_lm_head
         
