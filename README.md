@@ -4,14 +4,9 @@
 🌐 <a href="https://fuvty.github.io/R2R_Project_Page/"><b>Project Page</b></a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://arxiv.org/abs/2505.21600"><b>arXiv</b></a>&nbsp&nbsp | &nbsp&nbsp🤗 <a href="https://huggingface.co/papers/2505.21600"><b>HuggingFace</b></a>
 </p>
 
-Roads to Rome (R2R) intelligently combines small and large language models by routing only critical, reasoning-divergent tokens to the large model.
+Roads to Rome (R2R) intelligently combines small and large language models by routing **only critical, reasoning-divergent tokens to the large model**.
 
-<div align="center">
-  <video width="100%" controls>
-    <source src="https://raw.githubusercontent.com/fuvty/R2R_Project_Page/main/static/videos/R2R_demo.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</div>
+https://github.com/user-attachments/assets/382fabd8-a816-44ba-b100-b8dd047c3bcb
 
 By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× speedup** over R1-32B while **surpassing R1-7B and R1-14B by 1.6× and 1.1×** in accuracy on challenging math, coding, and QA benchmarks.
 
