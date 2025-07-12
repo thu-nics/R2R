@@ -1,4 +1,3 @@
-import re
 import torch
 from torch import Tensor
 # Remove HuggingFace imports
@@ -6,24 +5,14 @@ import logging
 from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
 import json
-import numpy as np
 from dataclasses import dataclass
-from itertools import chain
-import sys
 import os
 import requests
 # Add get_tokenizer import for compatibility
 from r2r.utils.config import MODEL_DICT
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from r2r.data.utils.convert_eos_tokens import save_semantic_tokens_config
-from r2r.data.data_process import MismatchPoint
 
-# Add the parent directory to Python path before any other imports
-# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from r2r.utils.sampling import sample_token
-
-from nltk.tokenize import sent_tokenize
 from nltk.tokenize import PunktSentenceTokenizer
 
 logger = logging.getLogger(__name__)

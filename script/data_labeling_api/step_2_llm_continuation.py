@@ -15,17 +15,13 @@ Resume Functionality:
 - Automatically detects and skips data IDs that have already been saved to the output file.
 """
 
-import os
 from pathlib import Path
 import pandas as pd
 import logging
 from tqdm import tqdm
 import argparse
-import sglang as sgl
-from typing import Dict, Tuple, List
 import json
 import concurrent.futures
-import threading
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -64,7 +60,7 @@ def parse_args():
                         help='Whether to skip stressing the divergent token')
     parser.add_argument('--resume', action='store_true', default=False,
                         help='Whether to resume from existing results by skipping already processed data IDs')
-    parser.add_argument('--is_print', default=False,
+    parser.add_argument('--is_print', action='store_true', default=False,
                         help='Whether to print the results')
     return parser.parse_args()
 

@@ -146,7 +146,7 @@ python script/data_labeling/step_2_llm_continuation.py --input_path output/query
 
 > **Note**: To use different models or loading path, edit the configuration in `r2r/utils/config.py`
 
-To speedup the process, use API inference instead:
+To speed up the process, use API inference instead:
 
 ```bash
 # Start SGLang server
