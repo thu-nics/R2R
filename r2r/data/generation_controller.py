@@ -1,7 +1,6 @@
 import re
 import torch
 from torch import Tensor
-# Remove HuggingFace imports
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
@@ -12,7 +11,7 @@ from itertools import chain
 import sys
 import os
 import jieba
-# Add sglang import and get_tokenizer
+import requests
 from r2r.utils.config import MODEL_DICT
 import sglang as sgl
 from sglang.srt.hf_transformers_utils import get_tokenizer
@@ -53,10 +52,45 @@ class DivergePoint:
 
 
 class ModelController:
-    def __init__(self, comparison_model: str = 'reference', mem_fraction_static: float = 0.5, tp_size: int = 1, dp_size: int = 1, base_gpu_id_main: int = 0, base_gpu_id_reference: int = 1, disable_cuda_graph: bool = False):
-        """Initialize models for generation control using sglang with token-based processing"""
-        # Load models
-        logger.info("Loading models...")
+    def __init__(
+        self, 
+        mode: str = 'direct',  # 'direct' or 'api'
+        comparison_model: str = 'reference',
+        # Direct mode parameters
+        mem_fraction_static: float = 0.5,
+        tp_size: int = 1,
+        dp_size: int = 1,
+        base_gpu_id_main: int = 0,
+        base_gpu_id_reference: int = 1,
+        disable_cuda_graph: bool = False,
+        # API mode parameters
+        api_url_main: str = "http://localhost:30000",
+        api_url_reference: str = "http://localhost:30000",
+        api_key: str = "api_key",
+        request_timeout: int = 6000
+    ):
+        """
+        Initialize ModelController with either direct engine access or API access.
+        
+        Args:
+            mode: Either 'direct' for direct engine access or 'api' for API requests
+            comparison_model: Type of comparison model to use
+            mem_fraction_static: Memory fraction for direct mode
+            tp_size: Tensor parallelism size for direct mode
+            dp_size: Data parallelism size for direct mode
+            base_gpu_id_main: Base GPU ID for main model in direct mode
+            base_gpu_id_reference: Base GPU ID for reference model in direct mode
+            disable_cuda_graph: Whether to disable CUDA graph in direct mode
+            api_url_main: API URL for main model in API mode
+            api_url_reference: API URL for reference model in API mode
+            api_key: API key for authentication in API mode
+            request_timeout: Request timeout in seconds for API mode
+        """
+        self.mode = mode
+        self.comparison_model = comparison_model
+        
+        # Load model paths
+        logger.info(f"Loading models in {mode} mode...")
         small_model_path = MODEL_DICT["continuation_main"]['model_path']
         if comparison_model == 'reference':
             reference_model_path = MODEL_DICT['reference']['model_path']
@@ -64,6 +98,29 @@ class ModelController:
         # Initialize HuggingFace tokenizer directly
         self.tokenizer = AutoTokenizer.from_pretrained(small_model_path, trust_remote_code=True)
 
+        # Check if we can reuse the same model
+        self.reuse_main_model = (comparison_model == 'reference') and (small_model_path == reference_model_path)
+
+        if self.mode == 'direct':
+            self._init_direct_mode(
+                small_model_path, reference_model_path, mem_fraction_static, tp_size, dp_size,
+                base_gpu_id_main, base_gpu_id_reference, disable_cuda_graph
+            )
+        elif self.mode == 'api':
+            self._init_api_mode(api_url_main, api_url_reference, api_key, request_timeout)
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Must be 'direct' or 'api'")
+
+        # Initialize common EOS token configuration
+        self._init_eos_tokens(small_model_path)
+
+        logger.info(f"ModelController initialized successfully in {mode} mode")
+
+    def _init_direct_mode(
+        self, small_model_path, reference_model_path, mem_fraction_static, tp_size, dp_size,
+        base_gpu_id_main, base_gpu_id_reference, disable_cuda_graph
+    ):
+        """Initialize direct engine mode"""
         # Initialize sglang models using Engine with skip_tokenizer_init=True
         self.main_model = sgl.Engine(
             model_path=small_model_path, 
@@ -77,13 +134,8 @@ class ModelController:
             disable_cuda_graph=disable_cuda_graph
         )
 
-        # Only load reference model if needed
-        self.comparison_model = comparison_model
-
-        # Use the main model if both models are the same
-        self.reuse_main_model = (comparison_model == 'reference') and (small_model_path == reference_model_path)
-
-        if comparison_model == 'reference':
+        # Initialize reference model if needed
+        if self.comparison_model == 'reference':
             if self.reuse_main_model:
                 print("Reusing main model for reference model")
                 self.reference_model = self.main_model
@@ -100,6 +152,21 @@ class ModelController:
                     disable_cuda_graph=disable_cuda_graph
                 )
 
+    def _init_api_mode(self, api_url_main, api_url_reference, api_key, request_timeout):
+        """Initialize API mode"""
+        self.api_url_main = api_url_main
+        self.api_url_reference = api_url_reference
+        self.api_key = api_key
+        self.request_timeout = request_timeout
+        
+        if self.reuse_main_model:
+            print("Using same API endpoint for both main and reference models")
+        
+        logger.info(f"Main model API: {self.api_url_main}")
+        logger.info(f"Reference model API: {self.api_url_reference}")
+
+    def _init_eos_tokens(self, small_model_path):
+        """Initialize EOS tokens configuration"""
         # Custom EOS tokens - keep the same logic for tracking EOS tokens
         eos_tokens_config_path = os.path.join(os.path.dirname(__file__), 'eos_tokens_config.json')
         if not os.path.exists(eos_tokens_config_path):
@@ -122,18 +189,6 @@ class ModelController:
             self.stop_token_ids.append(MODEL_DICT["special_tokens"]["think_start"])
             self.stop_token_ids.append(MODEL_DICT["special_tokens"]["think_end"])
             
-        # self.eos_token_ids = [
-        #     151648, # <think>
-        #     151649, # </think>
-        #     151643, # 
-        #     4710, # '\n\n
-        #     18611,15514,6320,83900,70191,94521,24796,32057,53589,50524,52324,33933,45806,2146,44364,26469, # ??\n\n
-        #     271, 2219, 1837, 26487, 66426, 15441, 3876, 44611, 692, 21518, 41025, 3554, 10452, 382, 8680, 1447, 401, 68327, 1339, 1939, 19347, 2533, 18797, 19324, 4257, 43738, 630, 58629, 60543, 78988,75048,3407,26850,17701, # ?\n\n
-        #     198, 4894, 698, 4956, 25046, 13744, 1248, 1006, 340, 5618, 16930, 345, 6913, 624, 5894, 510, 280, 14750, 397, 5267, 62799, 921, 12924, 3989, 515, 7360, 532, 88141,8997,41453,94432, # ?\n
-        #     22614,33947,50347,7129,89262,11248,5661,14288,39071,79295,5929,1171,1019,33084,51377,84274,10952,7088, #??\n
-        #     13,1773,6313,11319,30,1112 # end of data item
-        # ]
-        
         self.eos_tokens = [
             self.tokenizer.decode([token_id]) for token_id in self.stop_token_ids
         ]
@@ -145,83 +200,64 @@ class ModelController:
             num_continuation=-1  # Default value, will be updated when used
         )
 
-        logger.info("ModelController initialized successfully")
-
     def _is_eos_generated(self, token_id: int) -> bool:
         """Check if generated token is an EOS token"""
         return token_id in self.stop_token_ids
 
-    @staticmethod
-    def _greedy_generate(
-        model: sgl.Runtime,
-        prompt: str,
-        max_new_tokens: Optional[int] = 128,
-        temperature: Optional[float] = 0.0,
-        eos_token_ids: Optional[list] = None,
-        top_p: float = 1.0,
-        num_continuation: int = 1
-    ) -> List[int]:
-        """
-        Custom greedy generation with sglang.
+    def _make_api_request(self, api_url: str, input_ids_list: List[List[int]], sampling_params: dict, custom_logit_processor: str = None) -> List[Dict]:
+        """Make API request to generate endpoint (only used in API mode)"""
+        if self.mode != 'api':
+            raise RuntimeError("_make_api_request can only be called in API mode")
+            
+        headers = {
+            "Content-Type": "application/json",
+        }
         
-        Args:
-            model: The sglang Runtime instance to use for generation
-            prompt: Text prompt to generate from
-            max_new_tokens: Maximum number of new tokens to generate
-            temperature: Temperature for softmax (higher = more random, lower = more deterministic)
-            eos_token_ids: List of token IDs that should trigger early stopping
-            top_p: Top-p probability threshold for nucleus sampling (0 < top_p ≤ 1)
-            num_continuation: Number of EOS tokens to encounter before stopping generation
-        Returns:
-            List of generated token IDs
-        """
-
-        # Define a custom logit processor function to track EOS tokens
-        class EOSTracker:
-            def __init__(self, eos_token_ids, num_continuation):
-                self.eos_token_ids = eos_token_ids if eos_token_ids else []
-                self.num_continuation = num_continuation
-                self.eos_count = 0
-
-            def __call__(self, input_id, logits):
-                # Check if the last token was an EOS token
-                if input_id in self.eos_token_ids:
-                    self.eos_count += 1
-                    if self.eos_count >= self.num_continuation:
-                        # Signal generation to stop
-                        return True, None
-                return False, None
-
-        eos_tracker = EOSTracker(eos_token_ids, num_continuation)
-
-        # Create an sglang state with custom parameters
-        with sgl.interpretation(
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            logit_processor=eos_tracker if eos_token_ids else None
-        ):
-            # Define a simple generation task
-            @sgl.function
-            def generate(s):
-                s += sgl.gen(prompt=prompt)
-                return s.generated_text
-
-        # Execute the generation
-        result = generate()
-
-        # Convert the generated text to token IDs
-        tokenizer = sgl.Tokenizer(model=model.model_name_or_path)
-        generated_tokens = tokenizer.encode(result)
-
-        return generated_tokens
+        # Add authorization header if API key is provided
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        # Prepare request payload
+        data = {
+            "input_ids": input_ids_list,
+            "sampling_params": sampling_params,
+        }
+        
+        # Add custom logit processor if provided
+        if custom_logit_processor:
+            data["custom_logit_processor"] = custom_logit_processor
+        
+        try:
+            response = requests.post(
+                f"{api_url}/generate",
+                headers=headers,
+                json=data,
+                timeout=self.request_timeout
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # Extract the response content - expecting format similar to sglang output
+            if isinstance(result, list):
+                return result
+            else:
+                # Handle single response case
+                return [result]
+                
+        except requests.exceptions.Timeout:
+            raise Exception("API request timeout")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"API request failed: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Error processing API response: {str(e)}")
 
     def generate_continuation(
         self,
         update_context_tokens: List[List[int]],
         current_token: List[int],
         model_type: str,
-        past_key_values: Optional[Tuple] = None,  # Not needed with sglang but kept for API compatibility
+        past_key_values: Optional[Tuple] = None,  # Not needed but kept for API compatibility
         max_new_tokens: int = 128,
         temperature: float = 1.0,
         num_samples: int = 1,
@@ -230,13 +266,13 @@ class ModelController:
         num_continuation: int = 1
     ) -> List[Dict]:
         """
-        Generate continuation from given context using sglang batch inference with token IDs.
+        Generate continuation from given context using either direct engine or API.
         
         Args:
             update_context_tokens: List of lists of tokens from last mismatch to current position
             current_token: List of tokens to generate the continuation for
             model_type: Either 'small' or 'reference'
-            past_key_values: Not used in sglang implementation
+            past_key_values: Not used but kept for compatibility
             max_new_tokens: Maximum number of new tokens to generate
             temperature: Temperature for generation (higher = more random, lower = more deterministic)
             num_samples: Number of samples to generate per input
@@ -246,15 +282,32 @@ class ModelController:
         Returns:
             List of dictionaries, each containing:
                 - generated_tokens: List of generated token IDs`
-                - past_key_values: None (not used in sglang)
+                - past_key_values: None (not used)
                 - generated_text: Decoded text of extracted tokens (for compatibility)
         """
+        if self.mode == 'direct':
+            return self._generate_continuation_direct(
+                update_context_tokens, current_token, model_type, max_new_tokens,
+                temperature, num_samples, top_p, top_k, num_continuation
+            )
+        elif self.mode == 'api':
+            return self._generate_continuation_api(
+                update_context_tokens, current_token, model_type, max_new_tokens,
+                temperature, num_samples, top_p, top_k, num_continuation
+            )
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+    def _generate_continuation_direct(
+        self, update_context_tokens, current_token, model_type, max_new_tokens,
+        temperature, num_samples, top_p, top_k, num_continuation
+    ) -> List[Dict]:
+        """Generate continuation using direct engine access"""
         # Select appropriate model for model-based generation
         model = self.main_model if model_type == 'small' else self.reference_model
 
         # Process inputs for batch generation
         input_ids_list = []
-
         for ctx_tokens, curr_tok in zip(update_context_tokens, current_token):
             # Create the input by appending current token to context tokens
             input_ids = ctx_tokens + [curr_tok]
@@ -295,14 +348,14 @@ class ModelController:
                 generated_token_ids = output["output_ids"]
 
                 # Remove the last EOS token if it exists
-                if generated_token_ids[-1] == self.tokenizer.eos_token_id:
+                if generated_token_ids and generated_token_ids[-1] == self.tokenizer.eos_token_id:
                     generated_token_ids = generated_token_ids[:-1]
 
                 # Decode to text for compatibility with existing code
                 generated_text = self.tokenizer.decode(generated_token_ids)
                 results.append({
                     'generated_tokens': generated_token_ids,
-                    'past_key_values': None,  # Not used in sglang Engine
+                    'past_key_values': None,
                     'generated_text': generated_text
                 })
             return results
@@ -315,6 +368,131 @@ class ModelController:
                 'past_key_values': None,
                 'generated_text': ''
             } for _ in range(len(input_ids_list))]
+
+    def _generate_continuation_api(
+        self, update_context_tokens, current_token, model_type, max_new_tokens,
+        temperature, num_samples, top_p, top_k, num_continuation
+    ) -> List[Dict]:
+        """Generate continuation using API requests"""
+        # Select appropriate API endpoint based on model type
+        if model_type == 'small':
+            api_url = self.api_url_main
+        elif model_type == 'reference':
+            api_url = self.api_url_reference if not self.reuse_main_model else self.api_url_main
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+
+        # Process inputs for batch generation
+        input_ids_list = []
+        for ctx_tokens, curr_tok in zip(update_context_tokens, current_token):
+            # Create the input by appending current token to context tokens
+            input_ids = ctx_tokens + [curr_tok]
+            # If num_samples > 1, duplicate each input
+            for _ in range(num_samples):
+                input_ids_list.append(input_ids[:])
+
+        # Prepare sampling parameters
+        sampling_params = {
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "max_new_tokens": max_new_tokens,
+        }
+
+        # Set EOS token behavior based on num_continuation value
+        custom_logit_processor = None
+        if num_continuation == 1:
+            # For single continuation, use our custom EOS tokens
+            sampling_params["stop_token_ids"] = self.stop_token_ids
+        elif num_continuation > 1:
+            # For multiple continuations, update the logit processor's num_continuation
+            self.deterministic_logit_processor.num_continuation = num_continuation
+            sampling_params["custom_params"] = {'dummy_for_req': 1}
+            custom_logit_processor = self.deterministic_logit_processor.to_str()
+        # When num_continuation == -1, we don't set stop_token_ids, 
+        # letting the model generate until its default EOS or max_new_tokens
+
+        # Generate completions using API requests
+        try:
+            outputs = self._make_api_request(
+                api_url=api_url,
+                input_ids_list=input_ids_list,
+                sampling_params=sampling_params,
+                custom_logit_processor=custom_logit_processor
+            )
+
+            # Process results
+            results = []
+            for output in outputs:
+                # Get the generated token ids (output_ids contains only the new tokens)
+                generated_token_ids = output["output_ids"]
+
+                # Remove the last EOS token if it exists
+                if generated_token_ids and generated_token_ids[-1] == self.tokenizer.eos_token_id:
+                    generated_token_ids = generated_token_ids[:-1]
+
+                # Decode to text for compatibility with existing code
+                generated_text = self.tokenizer.decode(generated_token_ids)
+                results.append({
+                    'generated_tokens': generated_token_ids,
+                    'past_key_values': None,
+                    'generated_text': generated_text
+                })
+            return results
+
+        except Exception as e:
+            logger.error(f"Error during API generation: {str(e)}")
+            # Return empty results on error
+            return [{
+                'generated_tokens': [],
+                'past_key_values': None,
+                'generated_text': ''
+            } for _ in range(len(input_ids_list))]
+
+    def generate_continuation_single(
+        self,
+        update_context_tokens: List[int],
+        current_token: int,
+        model_type: str,
+        max_new_tokens: int = 128,
+        temperature: float = 1.0,
+        num_samples: int = 1,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        num_continuation: int = 1
+    ) -> List[Dict]:
+        """
+        Generate continuation for a single mismatch.
+        
+        Args:
+            update_context_tokens: List of tokens from last mismatch to current position
+            current_token: Token to generate the continuation for
+            model_type: Either 'small' or 'reference'
+            max_new_tokens: Maximum number of new tokens to generate
+            temperature: Temperature for generation
+            num_samples: Number of samples to generate
+            top_p: Top-p probability threshold for nucleus sampling
+            top_k: Top-k sampling parameter
+            num_continuation: Number of continuations to generate
+            
+        Returns:
+            List of dictionaries, each containing:
+                - generated_tokens: List of generated token IDs
+                - past_key_values: None (not used)
+                - generated_text: Decoded text of extracted tokens
+        """
+        # Convert single inputs to lists for compatibility with existing method
+        return self.generate_continuation(
+            update_context_tokens=[update_context_tokens],
+            current_token=[current_token],
+            model_type=model_type,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            num_samples=num_samples,
+            top_p=top_p,
+            top_k=top_k,
+            num_continuation=num_continuation
+        )
 
     def extract_real_continuation(
         self,
@@ -604,14 +782,18 @@ class ModelController:
         return all_previous, result
 
     def shutdown(self):
-        """Shut down the Engine instances to free resources"""
+        """Shut down resources based on the mode"""
         try:
-            self.main_model.shutdown()
-            if self.comparison_model == 'reference':
-                self.reference_model.shutdown()
-            logger.info("ModelController engines shut down successfully")
+            if self.mode == 'direct':
+                self.main_model.shutdown()
+                if self.comparison_model == 'reference' and not self.reuse_main_model:
+                    self.reference_model.shutdown()
+                logger.info("ModelController direct engines shut down successfully")
+            elif self.mode == 'api':
+                logger.info("ModelController API client shutdown")
         except Exception as e:
-            logger.error(f"Error shutting down engines: {str(e)}")
+            logger.error(f"Error shutting down ModelController: {str(e)}")
+
 
 class DeterministicLogitProcessor(CustomLogitProcessor):
     """A dummy logit processor that changes the logits to always
@@ -659,4 +841,4 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
             logits[eos_mask, :] = -float("inf")
             logits[eos_mask, self.eos_token_id] = 1.0
        
-        return logits
+        return logits 

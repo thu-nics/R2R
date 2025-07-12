@@ -18,7 +18,6 @@ def _load_model_dict():
 # Model configurations
 MODEL_DICT = _load_model_dict()
 
-VOCABULARY_SIZE = 152064
 TOTAL_GPU_NUM = 2
 
 @dataclass

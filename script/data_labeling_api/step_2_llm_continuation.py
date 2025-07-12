@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from r2r.data.data_process import DataProcessor, MismatchPoint
-from r2r.data.generation_controller_api import ModelController, DivergePoint
+from r2r.data.generation_controller import ModelController, DivergePoint
 from r2r.data.verify_model import ComparisonPoint, data_points_to_df
 
 def parse_args():
@@ -275,7 +275,13 @@ def main():
     processor = DataProcessor(sample_data, max_tokens=args.max_tokens, comparison_model='real')
 
     # Initialize the generation controller and verify model
-    gen_controller = ModelController(comparison_model='real', api_url_main=args.api_url_main, api_url_reference=args.api_url_reference, request_timeout=args.request_timeout)
+    gen_controller = ModelController(
+        mode='api',
+        comparison_model='real', 
+        api_url_main=args.api_url_main, 
+        api_url_reference=args.api_url_reference, 
+        request_timeout=args.request_timeout
+    )
     
     logger.info("verify model disabled (--verify flag not provided)")
         
