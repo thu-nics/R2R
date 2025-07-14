@@ -666,7 +666,6 @@ class HiddenStatesClassifierWithLMHead(nn.Module):
             Model output (logits)
         """
         # Process hidden states through LM head
-        hidden_states = hidden_states
         
         # Apply layer normalization if enabled
         if self.normalize_input:
