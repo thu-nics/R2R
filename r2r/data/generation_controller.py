@@ -55,7 +55,7 @@ class ModelController:
     def __init__(
         self, 
         mode: str = 'direct',  # 'direct' or 'api'
-        comparison_model: str = 'reference',
+        comparison_model: str = 'real', # 'real' or 'reference'
         # Direct mode parameters
         mem_fraction_static: float = 0.5,
         tp_size: int = 1,
@@ -74,7 +74,7 @@ class ModelController:
         
         Args:
             mode: Either 'direct' for direct engine access or 'api' for API requests
-            comparison_model: Type of comparison model to use
+            comparison_model: Type of comparison model to use, choosing from 'real' and 'reference'
             mem_fraction_static: Memory fraction for direct mode
             tp_size: Tensor parallelism size for direct mode
             dp_size: Data parallelism size for direct mode
@@ -94,6 +94,8 @@ class ModelController:
         small_model_path = MODEL_DICT["continuation_main"]['model_path']
         if comparison_model == 'reference':
             reference_model_path = MODEL_DICT['reference']['model_path']
+        else:
+            reference_model_path = ""
 
         # Initialize HuggingFace tokenizer directly
         self.tokenizer = AutoTokenizer.from_pretrained(small_model_path, trust_remote_code=True)
