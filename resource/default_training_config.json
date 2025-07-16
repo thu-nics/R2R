@@ -14,7 +14,7 @@
       ],
       "expansion_factor": 4,
       "dropout_rate": 0.1,
-      "dtype": "float32",
+      "_dtype": "float32",
       "use_position_embedding": false,
       "freeze_lm_head": true,
       "normalize_input": false
