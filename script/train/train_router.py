@@ -430,66 +430,52 @@ class InputLabelDataset(Dataset):
             columns.append(self.hidden_states_col)
         if self.use_token:
             columns.append(self.token_col)
-            
-        # Convert dataset to PyTorch tensors
-        # columns.append("small_mid_hidden_states")
-        self.dataset.set_format(type='torch', columns=columns)
 
-        # Pull out the whole dataset as a dict of tensors
-        # Now data_dict[...] are actual torch.Tensor objects
-        data_dict = self.dataset[:]
-        
-        # Pre-convert tensors to the correct data types
-        # Create new versions of the columns with the right types
-        converted_dataset = {}
-        
-        # Convert label and filter columns
-        converted_dataset[self.label_column] = data_dict[self.label_column].long()
-        converted_dataset["mismatch"] = data_dict["mismatch"].long()
-        converted_dataset["mask"] = data_dict["mask"].long()
-        
-        # Convert input columns
-        if self.use_logits:
-            converted_dataset[self.logits_col] = data_dict[self.logits_col].float()
-        if self.use_hidden_states:
-            converted_dataset[self.hidden_states_col] = data_dict[self.hidden_states_col].float()
-            # concat here
-            # converted_dataset[self.hidden_states_col] = torch.cat([data_dict[self.hidden_states_col].float(), data_dict["small_mid_hidden_states"].float()], dim=-1)
-        if self.use_token:
-            converted_dataset[self.token_col] = data_dict[self.token_col].long()
-        
-        # Replace the dataset with the converted version
-        self.converted_dataset = converted_dataset
+        # Convert input to columns
+        columns = [
+            self.label_column,
+            "mismatch",
+            "mask",
+            *([self.logits_col] if self.use_logits else []),
+            *([self.hidden_states_col] if self.use_hidden_states else []),
+            *([self.token_col] if self.use_token else []),
+        ]
+
+        # Convert dataset to PyTorch tensors
+        self.dataset.set_format(type="torch", columns=columns)
         
         # Print dataset info
-        print(f"Dataset prepared with {len(data_dict)} samples.")
+        print(f"Dataset prepared with {len(self.dataset)} samples.")
         print(f"Using input types: {self.input_type}")
         
         # Print tensor shapes for debugging
+        sample = self.dataset[0]  # a dict of torch.Tensors
         if self.use_logits:
-            print(f"Logits shape: {self.converted_dataset[self.logits_col].shape}")
+            print(f"Logits shape: {sample[self.logits_col].shape}")
         if self.use_hidden_states:
-            print(f"Hidden states shape: {self.converted_dataset[self.hidden_states_col].shape}")
+            print(f"Hidden states shape: {sample[self.hidden_states_col].shape}")
         if self.use_token:
-            print(f"Token shape: {self.converted_dataset[self.token_col].shape}")
+            print(f"Token shape: {sample[self.token_col].shape}")
             
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx):
+        row = self.dataset[idx]
+
         # Get pre-converted label and filter
-        label = self.converted_dataset[self.label_column][idx]
-        filter_var = self.converted_dataset["mismatch"][idx]
-        mask = self.converted_dataset["mask"][idx]
+        label = row[self.label_column].long()
+        filter_var = row["mismatch"].long()
+        mask = row["mask"].long()
         
         # Prepare inputs using pre-converted tensors (no type conversion needed)
         inputs = {}
         if self.use_logits:
-            inputs["logits"] = self.converted_dataset[self.logits_col][idx]
+            inputs["logits"] = row[self.logits_col].float()
         if self.use_hidden_states:
-            inputs["hidden_states"] = self.converted_dataset[self.hidden_states_col][idx]
+            inputs["hidden_states"] = row[self.hidden_states_col].float()
         if self.use_token:
-            inputs["token"] = self.converted_dataset[self.token_col][idx]
+            inputs["token"] = row[self.token_col].long()
         
         return inputs, label, filter_var, mask
 
