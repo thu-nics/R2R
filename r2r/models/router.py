@@ -236,7 +236,7 @@ def save_model(
     )
 
 
-def load_model(model_path: str, device: str = "cuda", dtype=torch.float32, **kwargs) -> tuple[nn.Module, dict]:
+def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Module, dict]:
     """
     Load a model from a saved file.
 
@@ -260,6 +260,7 @@ def load_model(model_path: str, device: str = "cuda", dtype=torch.float32, **kwa
     model_specific_args = model_config.pop("model_specific_args", {})
 
     # Create model with init_args
+    dtype = init_args.pop("dtype", None) # dtype is not a model parameter, so we need to pop it out
     model = create_classifier(model_type, **init_args)
 
     # Load state dict

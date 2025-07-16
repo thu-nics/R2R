@@ -8,11 +8,6 @@ Outputs:
 - A directory (specified by `--output_path`, default: `output/playground/continuation`) containing:
     - `args.json`: A JSON file logging the arguments used for the script execution.
     - `generation_results_data_all_real.csv`: Each row corresponds to a processed mismatch, detailing the generated continuation from the SLM token and the LLM continuation, along with their respective contexts.
-
-Resume Functionality:
-- Use `--resume` flag to skip already processed data IDs by checking existing output CSV files.
-- Works with both range-specific (--low/--high) and full dataset processing.
-- Automatically detects and skips data IDs that have already been saved to the output file.
 """
 
 import os
@@ -71,23 +66,24 @@ def parse_args():
                         help='Whether to print the results')
     return parser.parse_args()
 
-def get_processed_data_ids(results_path):
-    """Read existing results file and return set of processed data_ids"""
+def get_processed_data_ids_and_full_results(results_path):
+    """Read existing results file and return both processed data_ids and full results DataFrame"""
     if not results_path.exists():
-        return set()
+        return set(), pd.DataFrame()
     
     try:
         existing_df = pd.read_csv(results_path)
         if 'data_id' in existing_df.columns:
             processed_ids = set(existing_df['data_id'].unique())
             logger.info(f"Found {len(processed_ids)} already processed data IDs in {results_path}")
-            return processed_ids
+            logger.info(f"Loaded {len(existing_df)} existing result rows")
+            return processed_ids, existing_df
         else:
             logger.warning(f"No 'data_id' column found in existing results file {results_path}")
-            return set()
+            return set(), pd.DataFrame()
     except Exception as e:
         logger.warning(f"Could not read existing results file {results_path}: {e}")
-        return set()
+        return set(), pd.DataFrame()
 
 def main():
     args = parse_args()
@@ -129,9 +125,10 @@ def main():
         print(f"Loaded {len(sample_data)} rows with all data sample IDs")
 
     # Handle resume functionality
+    existing_results_df = pd.DataFrame()
     if args.resume:
         logger.info("Resume mode enabled - checking for existing results...")
-        processed_data_ids = get_processed_data_ids(results_path)
+        processed_data_ids, existing_results_df = get_processed_data_ids_and_full_results(results_path)
         
         if processed_data_ids:
             # Filter out already processed data IDs
@@ -141,14 +138,26 @@ def main():
             
             logger.info(f"Resume: Filtered out {original_count - remaining_count} already processed data IDs")
             logger.info(f"Resume: {remaining_count} data samples remaining to process")
+            logger.info(f"Resume: Loaded {len(existing_results_df)} existing result rows that will be preserved")
             
             if remaining_count == 0:
-                logger.info("All data samples have already been processed. Exiting.")
+                logger.info("All data samples have already been processed.")
+                logger.info("Resume: Existing results are already complete, no new processing needed.")
+                # Still save the final results file to ensure consistency
+                if not existing_results_df.empty:
+                    if args.low is not None and args.high is not None:
+                        final_results_filename = f"generation_results_data_{args.low}_to_{args.high}_real_full.csv"
+                    else:
+                        final_results_filename = f"generation_results_data_all_real_full.csv"
+                    final_results_path = output_path / final_results_filename
+                    logger.info(f"Saving existing results to final file: {final_results_path}")
+                    existing_results_df.to_csv(final_results_path, index=False)
                 return
         else:
             logger.info("Resume: No existing results found, processing all data samples")
     else:
         logger.info("Resume mode disabled - processing all data samples (existing results may be overwritten)")
+        existing_results_df = pd.DataFrame()
 
     # Process the data
     processor = DataProcessor(sample_data, max_tokens=args.max_tokens, comparison_model='real')
@@ -167,6 +176,10 @@ def main():
 
     # Process all sentences and collect comparison points
     comparison_points = []
+    
+    # Track if we need to write existing results first (for resume mode)
+    first_write_done = False
+    
     for data_id, mismatches in tqdm(grouped_mismatches.items(), desc="Processing data samples"):
         data_comparison_points = []
         data_mismatch_points = {}
@@ -327,11 +340,20 @@ def main():
         if 'data_id' not in data_df.columns:
             data_df['data_id'] = data_id
 
-        # Save in append mode if file exists, otherwise create new file
-        if results_path.exists():
-            data_df.to_csv(results_path, mode='a', header=False, index=False)
+        # Handle first write in resume mode
+        if not first_write_done:
+            if args.resume and not existing_results_df.empty:
+                # First write: save existing results first, then append new data
+                logger.info(f"Resume mode: Writing {len(existing_results_df)} existing results first")
+                existing_results_df.to_csv(results_path, index=False)
+                data_df.to_csv(results_path, mode='a', header=False, index=False)
+            else:
+                # Normal first write
+                data_df.to_csv(results_path, index=False)
+            first_write_done = True
         else:
-            data_df.to_csv(results_path, index=False)
+            # Subsequent writes: always append
+            data_df.to_csv(results_path, mode='a', header=False, index=False)
 
         logger.info(f"Saved results for data sample {data_id}")
 
@@ -340,15 +362,24 @@ def main():
     # Save final results
     results_df = data_points_to_df(comparison_points, mismatch_points_by_id, 'real', False)
     
+    # In resume mode, combine existing results with new results
+    if args.resume and not existing_results_df.empty:
+        logger.info(f"Resume mode: Combining {len(existing_results_df)} existing results with {len(results_df)} new results")
+        # Combine existing results with new results
+        combined_results_df = pd.concat([existing_results_df, results_df], ignore_index=True)
+        logger.info(f"Combined total: {len(combined_results_df)} results")
+    else:
+        combined_results_df = results_df
+    
     # Save results with range in filename
     if args.low is not None and args.high is not None:
         final_results_filename = f"generation_results_data_{args.low}_to_{args.high}_real_full.csv"
     else:
         final_results_filename = f"generation_results_data_all_real_full.csv"
 
-    results_path = output_path / final_results_filename
-    logger.info(f"Saving results to {results_path}")
-    results_df.to_csv(results_path, index=False)
+    final_results_path = output_path / final_results_filename
+    logger.info(f"Saving final combined results to {final_results_path}")
+    combined_results_df.to_csv(final_results_path, index=False)
     
     # Clean up resources
     print("Process completed.")

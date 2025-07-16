@@ -219,6 +219,7 @@ class WorkerManager:
             "--high", str(high),
             "--tp_size", str(self.args.tp_size),
             "--dp_size", str(self.args.dp_size),
+            "--resume",
         ]
         
         # Add model parameters

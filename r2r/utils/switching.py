@@ -177,7 +177,7 @@ class NeuralSwitching(ModelSwitchingStrategy):
         self.device = device
         self.dtype = dtype
         # Load model using the load_model function from classifier.py
-        self.model, model_config = load_model(model_path, device=self.device, dtype=self.dtype)
+        self.model, model_config = load_model(model_path, device=self.device)
 
         # Use saved optimal threshold if available in common_args
         if threshold is None:
@@ -280,9 +280,11 @@ class NeuralRollingWindowSwitching(ModelSwitchingStrategy):
         required_simple_ratio: float = 1.0,
         threshold: Optional[float] = None,
         device: str = "cuda",
+        dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         self.device = device
+        self.dtype = dtype
 
         # Load model using the load_model function from classifier.py
         self.model, model_config = load_model(model_path, device=self.device)
@@ -391,13 +393,14 @@ class NeuralMultiInputSwitching(ModelSwitchingStrategy):
     def __init__(self, model_path: str = 'critical_classifier_multi_input_0304.pt',
                  neural_window_size: int = 3,
                  threshold: Optional[float] = None,
-                 device: str = 'cuda'):
+                 device: str = 'cuda',
+                 dtype: torch.dtype = torch.float32):
         super().__init__()
         
         raise NotImplementedError
 
         self.device = device
-        
+        self.dtype = dtype
         # Load model using the load_model function from classifier.py
         self.model, model_config = load_model(model_path, device=self.device)
         

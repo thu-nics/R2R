@@ -49,7 +49,7 @@ def parse_args():
                         help='Tensor parallel size')
     parser.add_argument('--mem_fraction', type=float, default=0.9,
                         help='Memory fraction for verify model')
-    parser.add_argument('--save_interval', type=int, default=0,
+    parser.add_argument('--save_interval', type=int, default=100,
                         help='Save results every N batches. 0 means save only at the end.')
     return parser.parse_args()
 

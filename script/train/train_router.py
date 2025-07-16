@@ -683,13 +683,13 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
                     type="torch",
                     columns=["mismatch"]
                 )
-                datasets[split] = datasets[split].filter(filter_is_mismatch, batched=True)
+                datasets[split] = datasets[split].filter(filter_is_mismatch, batched=True, num_proc=32)
             elif filter_config["type"] == "has_divergent":
                 datasets[split].set_format(
                     type="torch",
                     columns=["divergent"]
                 )
-                datasets[split] = datasets[split].filter(filter_has_divergent, batched=True)
+                datasets[split] = datasets[split].filter(filter_has_divergent, batched=True, num_proc=32)
             elif filter_config["type"] == "downsample_match_data":
                 # Convert dataset to PyTorch tensors for mismatch column
                 datasets[split].set_format(
@@ -727,7 +727,7 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
             before = len(datasets[split])
             # Reset format to avoid torch tensors in filter
             datasets[split].set_format(type=None)
-            datasets[split] = datasets[split].filter(lambda ex: ex["mask"] == 1)
+            datasets[split] = datasets[split].filter(lambda ex: ex["mask"] == 1 and ex["divergent"] in [0, 1], num_proc=32)
             after = len(datasets[split])
             print(f"Filtered {split} dataset by mask: {before} -> {after}")
 

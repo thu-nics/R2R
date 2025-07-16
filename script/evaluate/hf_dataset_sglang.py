@@ -1,6 +1,6 @@
 import os
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '29500'
+os.environ.setdefault('MASTER_PORT', '29500')
 os.environ['SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK'] = '1'
 import torch
 import transformers
