@@ -130,7 +130,7 @@ def validate_model(
             # Forward pass
             outputs = model(**inputs)
 
-            labels = labels.to(device)
+            labels = labels.to(device).float()
             filters = filters.to(device)
             
             # Calculate loss
@@ -277,7 +277,7 @@ def train_model(
             optimizer.zero_grad()
             outputs = model(**inputs)
 
-            labels = labels.to(device)
+            labels = labels.to(device).float()
 
             if output_type == "binary":
                 loss = criterion(outputs, labels.unsqueeze(1))
@@ -434,31 +434,35 @@ class InputLabelDataset(Dataset):
         # Convert dataset to PyTorch tensors
         # columns.append("small_mid_hidden_states")
         self.dataset.set_format(type='torch', columns=columns)
+
+        # Pull out the whole dataset as a dict of tensors
+        # Now data_dict[...] are actual torch.Tensor objects
+        data_dict = self.dataset[:]
         
         # Pre-convert tensors to the correct data types
         # Create new versions of the columns with the right types
         converted_dataset = {}
         
         # Convert label and filter columns
-        converted_dataset[self.label_column] = self.dataset[self.label_column].float()
-        converted_dataset["mismatch"] = self.dataset["mismatch"].float()
-        converted_dataset["mask"] = self.dataset["mask"].float()
+        converted_dataset[self.label_column] = data_dict[self.label_column].long()
+        converted_dataset["mismatch"] = data_dict["mismatch"].long()
+        converted_dataset["mask"] = data_dict["mask"].long()
         
         # Convert input columns
         if self.use_logits:
-            converted_dataset[self.logits_col] = self.dataset[self.logits_col].float()
+            converted_dataset[self.logits_col] = data_dict[self.logits_col].float()
         if self.use_hidden_states:
-            converted_dataset[self.hidden_states_col] = self.dataset[self.hidden_states_col].float()
+            converted_dataset[self.hidden_states_col] = data_dict[self.hidden_states_col].float()
             # concat here
-            # converted_dataset[self.hidden_states_col] = torch.cat([self.dataset[self.hidden_states_col].float(), self.dataset["small_mid_hidden_states"].float()], dim=-1)
+            # converted_dataset[self.hidden_states_col] = torch.cat([data_dict[self.hidden_states_col].float(), data_dict["small_mid_hidden_states"].float()], dim=-1)
         if self.use_token:
-            converted_dataset[self.token_col] = self.dataset[self.token_col].long()
+            converted_dataset[self.token_col] = data_dict[self.token_col].long()
         
         # Replace the dataset with the converted version
         self.converted_dataset = converted_dataset
         
         # Print dataset info
-        print(f"Dataset prepared with {len(self.dataset)} samples.")
+        print(f"Dataset prepared with {len(data_dict)} samples.")
         print(f"Using input types: {self.input_type}")
         
         # Print tensor shapes for debugging
