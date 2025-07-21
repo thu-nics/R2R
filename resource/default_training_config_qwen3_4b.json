@@ -2,7 +2,7 @@
   "model": {
     "model_type": "HiddenStatesTokenLMHeadLogitsClassifier",
     "init_args": {
-      "hidden_states_size": 1536,
+      "hidden_states_size": 2048,
       "logits_size": 100,
       "hidden_dims": [
         1024,
@@ -14,10 +14,11 @@
       ],
       "expansion_factor": 4,
       "dropout_rate": 0.1,
+      "dtype": "float32",
       "use_position_embedding": false,
       "freeze_lm_head": true,
       "normalize_input": false,
-      "pretrained_model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+      "pretrained_model_name": "Qwen/Qwen3-4B"
     },
     "model_specific_args": {},
     "input_type": [
@@ -30,14 +31,14 @@
   "data": {
     "train": {
       "path": [
-        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=train"
+        "local:output_qwen3_1_7b/query_dataset_train/LLM_response/SLM_prefill/LLM_continuation_verify/divergent_label_dataset"
       ],
       "type": "divergent",
       "input_prefix": "small_"
     },
     "test": {
       "path": [
-        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=test"
+        "local:output_qwen3_1_7b/query_dataset_validation/LLM_response/SLM_prefill/LLM_continuation_verify/divergent_label_dataset"
     ],
       "type": "divergent",
       "input_prefix": "small_"
@@ -68,8 +69,8 @@
     "min_recall": 0.95
   },
   "output": {
-    "output_dir": "resource/default_router.pt",
-    "checkpoint_dir": "output/checkpoint",
+    "output_dir": "resource/default_router_qwen3_1_7b.pt",
+    "checkpoint_dir": "output/checkpoint_qwen3_1_7b",
     "model_name": null
   }
 }

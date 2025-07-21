@@ -208,7 +208,6 @@ def train_model(
     criterion: Any,
     optimizer: optim.Optimizer,
     device: torch.device,
-    dtype: torch.dtype = torch.float32,
     input_type: List[str] = ["logits"], 
     output_type: str = "binary",
     num_epochs: int = 10,
@@ -241,7 +240,7 @@ def train_model(
         Trained model and training history object
     """
     # Initialize model and tracker
-    model.to(device, dtype=dtype)
+    model.to(device)
     
     # Initialize TrainingHistory with wandb support if requested
     history = TrainingHistory(use_wandb=use_wandb, checkpoint_dir=checkpoint_dir)
@@ -565,7 +564,6 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
 
     """Model"""
     model_config = config["model"]
-    dtype = model_config["init_args"].pop("dtype", torch.float32)
     model = create_classifier(model_config["model_type"], **model_config["init_args"])
 
     # Get input type from model config
@@ -851,7 +849,6 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
             criterion,
             optimizer,
             device=device,
-            dtype=dtype,
             input_type=input_type,  # Pass input_type to train_model
             output_type=output_type,
             num_epochs=training_config["params"]["num_epochs"],

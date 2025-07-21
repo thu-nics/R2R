@@ -260,7 +260,7 @@ def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Modu
     model_specific_args = model_config.pop("model_specific_args", {})
 
     # Create model with init_args
-    dtype = init_args.pop("dtype", None) # dtype is not a model parameter, so we need to pop it out
+    dtype = model_config.get("training", {}).pop("dtype", None)
     model = create_classifier(model_type, **init_args)
 
     # Load state dict

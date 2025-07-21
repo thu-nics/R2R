@@ -30,14 +30,14 @@
   "data": {
     "train": {
       "path": [
-        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=train"
+        "local:output_qwen_r1/query_dataset_train/LLM_response/SLM_prefill/LLM_continuation_verify/divergent_label_dataset"
       ],
       "type": "divergent",
       "input_prefix": "small_"
     },
     "test": {
       "path": [
-        "hf_datasets:path=AnonymousPaperReview/R2R_Router_Training,split=test"
+        "local:output_qwen_r1/query_dataset_validation/LLM_response/SLM_prefill/LLM_continuation_verify/divergent_label_dataset"
     ],
       "type": "divergent",
       "input_prefix": "small_"

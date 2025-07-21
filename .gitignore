@@ -6,6 +6,13 @@
 !script/evaluate/eval_configs/r2r_configs.json
 !script/evaluate/eval_configs/dataset_configs.json
 !script/evaluate/eval_configs/model_configs.json
+!resource/default_training_config.json
+!resource/default_training_config_qwen3_0_6b.json
+!resource/default_training_config_qwen3_1_7b.json
+!resource/default_training_config_qwen3_4b.json
+!script/utils/configs/model_configs_qwen3_1_7b.json
+!script/utils/configs/model_configs_qwen3_4b.json
+!script/utils/configs/model_configs_qwen3_0_6b.json
 *.jsonl
 *.txt
 *.log
@@ -26,4 +33,4 @@ output/*
 wandb/*
 runs/*
 evaluate/*
-resource/*
+R2R/eval_output
