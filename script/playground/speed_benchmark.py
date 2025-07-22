@@ -178,7 +178,6 @@ class ModelBenchmark:
             try:
                 engine = sgl.Engine(
                     model_path=model_path,
-                    attention_backend="fa3",
                     tp_size=curr_tp_size,
                     skip_tokenizer_init=True,
                     disable_radix_cache=True,
