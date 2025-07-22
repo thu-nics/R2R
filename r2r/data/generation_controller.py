@@ -563,7 +563,6 @@ class ModelController:
         sentences = []
 
         for i, (start, end) in enumerate(spans):
-            # 向后扩展末尾空白符，包括 \n、\r、空格、制表符等
             extended_end = end
             while extended_end < len(text) and text[extended_end] in ' \t\n\r':
                 extended_end += 1
@@ -574,32 +573,20 @@ class ModelController:
     def custom_sent_tokenize(self, text: str) -> List[Tuple[str, int, int]]:
         def split_chinese_sentences(text):
             """use jieba to split chinese sentences, keep all original characters"""
-            # 将换行符替换为特殊标记
             text = text.replace('\n', '<NEWLINE>')
-
-            # 使用jieba的分句功能
             sentences = []
             current_sentence = ''
-
-            # 定义标点符号
             punctuation = '。！？；…'
-
             for i, char in enumerate(text):
                 current_sentence += char
-                # 如果当前字符是标点符号，或者到达文本末尾
                 if char in punctuation or i == len(text) - 1:
-                    # 处理当前句子
                     if current_sentence.strip():
-                        # 恢复换行符
                         current_sentence = current_sentence.replace('<NEWLINE>', '\n')
                         sentences.append(current_sentence.strip())
                     current_sentence = ''
-
-            # 处理最后一个句子（如果没有以标点符号结尾）
             if current_sentence.strip():
                 current_sentence = current_sentence.replace('<NEWLINE>', '\n')
                 sentences.append(current_sentence.strip())
-
             return sentences
 
         def contains_chinese(text):

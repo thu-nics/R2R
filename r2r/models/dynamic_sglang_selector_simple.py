@@ -577,7 +577,8 @@ class DynamicSimpleSGLangSelector:
         for result in final_results:
             # Combine prompt and output
             output_text = self.tokenizer.decode(result["output_ids"])
-            generated_text = result["prompt"] + output_text
+            # generated_text = result["prompt"] + output_text
+            generated_text = output_text
             generated_texts.append(generated_text)
 
         if record_generation:

@@ -24,6 +24,7 @@ from sglang.srt.hf_transformers_utils import get_tokenizer
 from r2r.evaluate.eval_utils import select_by_category, generate_cot_prompt, preprocess
 import multiprocessing as mp
 import warnings
+from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
 
 # set numpy random seed
 np.random.seed(42)
@@ -158,6 +159,13 @@ def parse_args():
 
     args.test_run_time = True
     
+    if args.use_hybrid:
+        if args.model_path == MODEL_DICT['quick']['model_path']:
+            print(f"Using quick model: {args.model_path}")
+        else:
+            raise warnings.warn(f"model path does not match the quick model path: {args.model_path} and {MODEL_DICT['quick']['model_path']}, use quick model instead")
+            args.model_path = MODEL_DICT['quick']['model_path']
+        
     # Get dataset config
     dataset_config = DATASET_CONFIGS[args.dataset]
     
