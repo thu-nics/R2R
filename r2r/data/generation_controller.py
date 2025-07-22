@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from itertools import chain
 import sys
 import os
-import jieba
 import requests
 from r2r.utils.config import MODEL_DICT
 import sglang as sgl
