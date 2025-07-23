@@ -489,12 +489,14 @@ class DynamicSimpleSGLangSelector:
             if reference_needed:
                 # Get indices of inputs that need reference model as a list
                 reference_indices = torch.where(model_choices == 1)[0].tolist()
+                active_to_original = token_manager.get_active_index()
+                reference_original_indices = [active_to_original[i] for i in reference_indices]
                 reference_input_ids = token_manager.fetch_active_input_ids(reference_indices)
 
                 # Generate with reference model for inputs that need it
                 reference_outputs = self.extend_step(
                     input_ids=reference_input_ids,
-                    input_indices=reference_indices,
+                    input_indices=reference_original_indices,
                     sampling_params=reference_sampling_params,
                 )
                 for i, reference_output_token in enumerate(reference_outputs):

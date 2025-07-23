@@ -532,8 +532,8 @@ def evaluate_problem(
                 avg_params_billions = stats['avg_params_billions']
                 
                 result = {
-                "problem_id": problems[i]['ID'],
-                "correct_answer": problems[i]['Answer'],
+                "problem_id": item['ID'],
+                "correct_answer": item['Answer'],
                 "has_extracted_answer": has_answer,
                 "predicted_answer": predicted_answer,
                 "is_correct": is_correct,

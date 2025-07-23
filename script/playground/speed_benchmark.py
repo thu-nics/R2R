@@ -180,6 +180,8 @@ class ModelBenchmark:
                     model_path=model_path,
                     tp_size=curr_tp_size,
                     skip_tokenizer_init=True,
+                    disable_radix_cache=True,
+                    disable_cuda_graph=True,
                     dtype="bfloat16"
                 )
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -206,7 +208,7 @@ class ModelBenchmark:
                     dtype=torch.bfloat16,
                     switching_strategy='neural',
                     strategy_kwargs=strategy_kwargs,
-                    is_record=True,
+                    is_record=False,
                     sglang_kwargs=sglang_kwargs
                 )
                 tokenizer = engine.tokenizer
@@ -265,9 +267,30 @@ class ModelBenchmark:
             batch_input_tokens = self._prepare_batch_inputs(prompts, tokenizer)
             print(f"Preparing batch of {len(prompts)} prompts...")
 
+            print("Warming up...")
+            if is_r2r:
+                _ = engine.generate(
+                    batch_input_tokens,
+                    max_new_tokens=100,
+                    temperature=self.args.temperature,
+                    top_p=self.args.top_p,
+                    record_generation=False,
+                    print_tokens=False,
+                )
+            else:
+                new_sampling_params_dict = {k: v for k, v in sampling_params_dict.items() if v is not None}
+                new_sampling_params_dict['max_new_tokens'] = 10
+                _ = engine.generate(
+                    input_ids=batch_input_tokens,
+                    sampling_params=new_sampling_params_dict,
+                    stream=False,
+                )
+
+            print("Warmup complete. Starting batch evaluation...")
+
             with PerformanceTimer() as timer:
                 if is_r2r:
-                    generated_texts, recorders = engine.generate(
+                    generated_texts, _ = engine.generate(
                         batch_input_tokens,
                         max_new_tokens=self.args.max_new_tokens,
                         temperature=self.args.temperature,
@@ -288,11 +311,9 @@ class ModelBenchmark:
             # ------------------ Post-processing ------------------
             total_output_tokens = 0
             generated_texts_processed = []
-            total_quick_tokens = 0
-            total_reference_tokens = 0
 
             if is_r2r:
-                for i, (text, rec) in enumerate(zip(generated_texts, recorders)):
+                for i, text in enumerate(generated_texts):
                     # Exclude prompt tokens from output token count
                     num_output_tokens = len(tokenizer.encode(text)) - len(batch_input_tokens[i])
                     total_output_tokens += num_output_tokens
@@ -302,11 +323,6 @@ class ModelBenchmark:
                         skip_special_tokens=True,
                     )
                     generated_texts_processed.append(processed_text)
-
-                    quick_tokens = sum(1 for r in rec.records if r.source_model == 'quick')
-                    reference_tokens = sum(1 for r in rec.records if r.source_model == 'reference')
-                    total_quick_tokens += quick_tokens
-                    total_reference_tokens += reference_tokens
             else:
                 for res in generated_results:
                     text = tokenizer.decode(res['output_ids'], skip_special_tokens=True)
@@ -325,23 +341,10 @@ class ModelBenchmark:
                 'generated_texts': generated_texts_processed,
             }
 
-            if is_r2r:
-                quick_ratio = (
-                    total_quick_tokens / (total_quick_tokens + total_reference_tokens)
-                    if (total_quick_tokens + total_reference_tokens) > 0 else 0
-                )
-                result.update({
-                    'total_quick_tokens': total_quick_tokens,
-                    'total_reference_tokens': total_reference_tokens,
-                    'quick_ratio': quick_ratio,
-                })
-
             # Logging summary
             print(f"Batch completed: {total_output_tokens} tokens in {elapsed_time_s:.2f}s")
             print(f"Speed: {tokens_per_second:.2f} tok/s")
             print(f"Average tokens per request: {result['avg_tokens_per_request']:.2f}")
-            if is_r2r:
-                print(f"Quick: {total_quick_tokens}, Reference: {total_reference_tokens}, Quick ratio: {result['quick_ratio']:.2%}")
 
             # Clean up
             if hasattr(engine, 'shutdown'):
@@ -362,12 +365,12 @@ class ModelBenchmark:
 
             with PerformanceTimer() as timer:
                 if is_r2r:
-                    generated_texts, recorders = engine.generate(
+                    generated_texts, _ = engine.generate(
                         input_ids,
                         max_new_tokens=self.args.max_new_tokens,
                         temperature=self.args.temperature,
                         top_p=self.args.top_p,
-                        record_generation=True,
+                        record_generation=False,
                         print_tokens=False,
                     )
                     generated_text_full = generated_texts[0]
@@ -405,22 +408,10 @@ class ModelBenchmark:
                 'generated_text': output_text,
             }
 
-            if is_r2r:
-                recorder = recorders[0]
-                quick_tokens = sum(1 for r in recorder.records if r.source_model == 'quick')
-                reference_tokens = sum(1 for r in recorder.records if r.source_model == 'reference')
-                record.update({
-                    'quick_tokens': quick_tokens,
-                    'reference_tokens': reference_tokens,
-                    'quick_ratio': quick_tokens / (quick_tokens + reference_tokens) if (quick_tokens + reference_tokens) > 0 else 0,
-                })
-
             results.append(record)
 
             # Logging similar to original implementation
             print(f"  Output tokens: {num_output_tokens}, Time: {elapsed_time_s:.2f}s, Speed: {tokens_per_second:.2f} tok/s")
-            if is_r2r:
-                print(f"  Quick: {quick_tokens}, Reference: {reference_tokens}, Quick ratio: {record['quick_ratio']:.2%}")
 
         if hasattr(engine, 'shutdown'):
             engine.shutdown()
@@ -439,8 +430,8 @@ class ModelBenchmark:
 
         # Mapping from flag to model_type string used by our unified evaluate
         flag_to_model = [
-            (self.args.test_slm, 'SLM (1.5B)', 'slm'),
-            (self.args.test_llm, 'LLM (32B)', 'llm'),
+            (self.args.test_slm, 'SLM', 'slm'),
+            (self.args.test_llm, 'LLM', 'llm'),
             (self.args.test_r2r, 'R2R', 'r2r'),
         ]
 
@@ -474,11 +465,6 @@ class ModelBenchmark:
                 print(f"  Total time: {results['total_time_s']:.2f}s")
                 print(f"  Speed: {results['tokens_per_s']:.2f} tok/s")
                 print(f"  Average tokens per request: {results['avg_tokens_per_request']:.2f}")
-                
-                if 'quick_ratio' in results:
-                    print(f"  Quick model usage: {results['quick_ratio']:.2%}")
-                    print(f"  Quick tokens: {results['total_quick_tokens']}")
-                    print(f"  Reference tokens: {results['total_reference_tokens']}")
             else:
                 # This is individual results (list of results)
                 total_tokens = sum(r['output_tokens'] for r in results)
@@ -492,10 +478,6 @@ class ModelBenchmark:
                 print(f"  Total time: {total_time:.2f}s")
                 print(f"  Average speed: {avg_speed:.2f} tok/s")
                 print(f"  Speed range: {min_speed:.2f} - {max_speed:.2f} tok/s")
-                
-                if model_name == "R2R" and results:
-                    avg_quick_ratio = statistics.mean([r['quick_ratio'] for r in results])
-                    print(f"  Average quick model usage: {avg_quick_ratio:.2%}")
         
         # Speed comparison
         if len(self.results) > 1:
@@ -532,9 +514,9 @@ def main():
     
     # Model selection
     parser.add_argument('--test_slm', action='store_true', default=False,
-                        help='Test SLM (1.5B) speed')
+                        help='Test SLM speed')
     parser.add_argument('--test_llm', action='store_true', default=False,
-                        help='Test LLM (32B) speed')
+                        help='Test LLM speed')
     parser.add_argument('--test_r2r', action='store_true', default=False,
                         help='Test R2R dynamic mode speed')
     
