@@ -163,7 +163,7 @@ def parse_args():
         if args.model_path == MODEL_DICT['quick']['model_path']:
             print(f"Using quick model: {args.model_path}")
         else:
-            raise warnings.warn(f"model path does not match the quick model path: {args.model_path} and {MODEL_DICT['quick']['model_path']}, use quick model instead")
+            print(f"model path does not match the quick model path: {args.model_path} and {MODEL_DICT['quick']['model_path']}, use quick model instead")
             args.model_path = MODEL_DICT['quick']['model_path']
         
     # Get dataset config

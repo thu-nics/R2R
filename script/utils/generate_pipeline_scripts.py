@@ -17,6 +17,7 @@ Available model configs:
 - Qwen3_0.6B: Qwen3-0.6B (small) and Qwen3-8B (large)
 - Qwen3_1.7B: Qwen3-1.4B (small) and Qwen3-8B (large) 
 - Qwen3_4B: Qwen3-4B (small) and Qwen3-8B (large)
+- Qwen3_0.6B_32B: Qwen3-0.6B (small) and Qwen3-32B (large)
 """
 
 import argparse
@@ -32,7 +33,8 @@ class PipelineScriptGenerator:
             "R1": "model_configs_r1.json",
             "Qwen3_0.6B": "model_configs_qwen3_0_6B.json", 
             "Qwen3_1.7B": "model_configs_qwen3_1_4B.json",
-            "Qwen3_4B": "model_configs_qwen3_4B.json"
+            "Qwen3_4B": "model_configs_qwen3_4B.json",
+            "Qwen3_0.6B_32B": "model_configs_qwen3_0_6B_32B.json"
         }
         
     def load_model_config(self, config_choice: str) -> Dict[str, Any]:
@@ -56,17 +58,18 @@ class PipelineScriptGenerator:
             ("R1", "DeepSeek-R1-Distill-Qwen (1.5B small, 32B large)"),
             ("Qwen3_0.6B", "Qwen3-0.6B (small) and Qwen3-8B (large)"),
             ("Qwen3_1.7B", "Qwen3-1.4B (small) and Qwen3-8B (large)"),
-            ("Qwen3_4B", "Qwen3-4B (small) and Qwen3-8B (large)")
+            ("Qwen3_4B", "Qwen3-4B (small) and Qwen3-8B (large)"),
+            ("Qwen3_0.6B_32B", "Qwen3-0.6B (small) and Qwen3-32B (large)")
         ], 1):
             print(f"{i}. {key}: {desc}")
         
         while True:
-            choice = input("\nSelect model config (1-4): ").strip()
-            if choice in ["1", "2", "3", "4"]:
-                config_choices = ["R1", "Qwen3_0.6B", "Qwen3_1.7B", "Qwen3_4B"]
+            choice = input("\nSelect model config (1-5): ").strip()
+            if choice in ["1", "2", "3", "4", "5"]:
+                config_choices = ["R1", "Qwen3_0.6B", "Qwen3_1.7B", "Qwen3_4B", "Qwen3_0.6B_32B"]
                 model_config = config_choices[int(choice) - 1]
                 break
-            print("Invalid choice. Please select 1-4.")
+            print("Invalid choice. Please select 1-5.")
         
         # Temperature and top_p
         while True:
