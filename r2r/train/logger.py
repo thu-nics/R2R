@@ -30,6 +30,10 @@ import wandb
 
 from r2r.models.router import save_model, load_model
 
+def create_mask(example):
+    return {"mask": 1}
+def create_mismatch(example):
+    return {"mismatch": example["divergent"]}
 def filter_data_id_critical(
     dataset: Any,
     max_critical_ratio: float = 0.5,
