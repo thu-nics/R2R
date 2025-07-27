@@ -26,6 +26,85 @@ logger = logging.getLogger(__name__)
 from r2r.data.data_process import DataProcessor, MismatchPoint
 from r2r.data.generation_controller import ModelController, DivergePoint
 from r2r.data.verify_model import ComparisonPoint, data_points_to_df
+from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
+
+def check_model_dict_consistency(input_path):
+    """
+    Check if MODEL_DICT is consistent with the models used in the input data
+    
+    Args:
+        input_path: Path to the input CSV file
+        
+    Returns:
+        bool: True if MODEL_DICT is consistent, False otherwise
+        
+    Raises:
+        FileNotFoundError: If required args.json or run_args.json files are not found
+        KeyError: If required keys are missing from the JSON files
+    """
+    input_path = Path(input_path)
+    
+    try:
+        # Read args.json from parent directory (contains test_model_list)
+        args_json_path = input_path.parent / 'args.json'
+        if not args_json_path.exists():
+            raise FileNotFoundError(f"args.json not found at {args_json_path}")
+            
+        with open(args_json_path, 'r') as f:
+            args_data = json.load(f)
+            
+        if 'test_model_list' not in args_data or len(args_data['test_model_list']) == 0:
+            raise KeyError("test_model_list not found or empty in args.json")
+            
+        slm_path_from_file = args_data['test_model_list'][0]
+        
+        # Read run_args.json from grandparent directory (contains model_path)
+        run_args_json_path = input_path.parent.parent / 'run_args.json'
+        if not run_args_json_path.exists():
+            raise FileNotFoundError(f"run_args.json not found at {run_args_json_path}")
+            
+        with open(run_args_json_path, 'r') as f:
+            run_args_data = json.load(f)
+            
+        if 'model_path' not in run_args_data:
+            raise KeyError("model_path not found in run_args.json")
+            
+        llm_path_from_file = run_args_data['model_path']
+        
+        # Get paths from MODEL_DICT
+        dict_slm_path = MODEL_DICT['quick']['model_path']
+        dict_llm_path = MODEL_DICT['reference']['model_path']
+        
+        # Compare paths (normalize to handle different mount points)
+        def normalize_path(path):
+            """Normalize path by replacing different mount prefixes"""
+            path = str(path)
+            # Replace /mnt/public with /share/public for comparison
+            if path.startswith('/mnt/public'):
+                path = path.replace('/mnt/public', '/share/public')
+            return Path(path)
+        
+        slm_match = normalize_path(slm_path_from_file) == normalize_path(dict_slm_path)
+        llm_match = normalize_path(llm_path_from_file) == normalize_path(dict_llm_path)
+        
+        logger.info(f"Model consistency check:")
+        logger.info(f"  SLM - File: {slm_path_from_file}")
+        logger.info(f"  SLM - Dict: {dict_slm_path}")
+        logger.info(f"  SLM - Match: {slm_match}")
+        logger.info(f"  LLM - File: {llm_path_from_file}")
+        logger.info(f"  LLM - Dict: {dict_llm_path}")
+        logger.info(f"  LLM - Match: {llm_match}")
+        
+        if not slm_match:
+            logger.warning(f"SLM model path mismatch! File: {slm_path_from_file}, MODEL_DICT: {dict_slm_path}")
+        if not llm_match:
+            logger.warning(f"LLM model path mismatch! File: {llm_path_from_file}, MODEL_DICT: {dict_llm_path}")
+            
+        return slm_match and llm_match
+        
+    except Exception as e:
+        logger.error(f"Error checking MODEL_DICT consistency: {e}")
+        return False
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Process data with specified data sample ID range')
@@ -87,6 +166,15 @@ def get_processed_data_ids_and_full_results(results_path):
 
 def main():
     args = parse_args()
+    
+    # Check MODEL_DICT consistency with the models used in the input data
+    logger.info("Checking MODEL_DICT consistency...")
+    is_consistent = check_model_dict_consistency(args.input_path)
+    if not is_consistent:
+        logger.error("MODEL_DICT is not consistent with the models used in the input data!")
+        logger.error("Please update MODEL_DICT configuration or use the correct input data.")
+        raise ValueError("MODEL_DICT configuration mismatch detected")
+    logger.info("MODEL_DICT consistency check passed.")
     
     # Use input_path from args if provided, otherwise use default
     input_path = Path(args.input_path)
