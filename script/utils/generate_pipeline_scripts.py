@@ -18,6 +18,7 @@ Available model configs:
 - Qwen3_1.7B: Qwen3-1.4B (small) and Qwen3-8B (large) 
 - Qwen3_4B: Qwen3-4B (small) and Qwen3-8B (large)
 - Qwen3_0.6B_32B: Qwen3-0.6B (small) and Qwen3-32B (large)
+- Qwen3_30B-A3B: Qwen3-0.6B (small) and Qwen3-30B-A3B (large)
 """
 
 import argparse
@@ -34,7 +35,8 @@ class PipelineScriptGenerator:
             "Qwen3_0.6B": "model_configs_qwen3_0_6B.json", 
             "Qwen3_1.7B": "model_configs_qwen3_1_4B.json",
             "Qwen3_4B": "model_configs_qwen3_4B.json",
-            "Qwen3_0.6B_32B": "model_configs_qwen3_0_6B_32B.json"
+            "Qwen3_0.6B_32B": "model_configs_qwen3_0_6B_32B.json",
+            "Qwen3_30B-A3B": "model_configs_qwen3_30B-A3B.json"
         }
         
     def load_model_config(self, config_choice: str) -> Dict[str, Any]:
@@ -59,17 +61,18 @@ class PipelineScriptGenerator:
             ("Qwen3_0.6B", "Qwen3-0.6B (small) and Qwen3-8B (large)"),
             ("Qwen3_1.7B", "Qwen3-1.4B (small) and Qwen3-8B (large)"),
             ("Qwen3_4B", "Qwen3-4B (small) and Qwen3-8B (large)"),
-            ("Qwen3_0.6B_32B", "Qwen3-0.6B (small) and Qwen3-32B (large)")
+            ("Qwen3_0.6B_32B", "Qwen3-0.6B (small) and Qwen3-32B (large)"),
+            ("Qwen3_30B-A3B", "Qwen3-0.6B (small) and Qwen3-30B-A3B (large)")
         ], 1):
             print(f"{i}. {key}: {desc}")
         
         while True:
-            choice = input("\nSelect model config (1-5): ").strip()
-            if choice in ["1", "2", "3", "4", "5"]:
-                config_choices = ["R1", "Qwen3_0.6B", "Qwen3_1.7B", "Qwen3_4B", "Qwen3_0.6B_32B"]
+            choice = input("\nSelect model config (1-6): ").strip()
+            if choice in ["1", "2", "3", "4", "5","6"]:
+                config_choices = ["R1", "Qwen3_0.6B", "Qwen3_1.7B", "Qwen3_4B", "Qwen3_0.6B_32B", "Qwen3_30B-A3B"]
                 model_config = config_choices[int(choice) - 1]
                 break
-            print("Invalid choice. Please select 1-5.")
+            print("Invalid choice. Please select 1-6.")
         
         # Temperature and top_p
         while True:

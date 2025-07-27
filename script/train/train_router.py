@@ -30,7 +30,7 @@ from datetime import datetime
 from datasets.features import ClassLabel
 from r2r.models.router import create_classifier
 from r2r.train.loss import FocalLoss, DPOLoss
-from r2r.train.logger import filter_data_id_critical, filter_is_mismatch, filter_has_divergent, print_training_progress, TrainingHistory
+from r2r.train.logger import filter_data_id_critical, filter_is_mismatch, filter_has_divergent, print_training_progress, TrainingHistory, create_mask, create_mismatch
 from r2r.models.router import save_model, load_model
 from r2r.train.optimizer import optimization_pipeline, standard_eval_pipeline
 
@@ -400,7 +400,7 @@ class InputLabelDataset(Dataset):
         if "mismatch" not in dataset.column_names:
             print("'mismatch' column not found. Creating it by duplicating 'divergent'.")
             self.dataset = self.dataset.map(
-                lambda example: {"mismatch": example["divergent"]},
+                create_mismatch,
                 batched=False
             )
         
@@ -418,7 +418,7 @@ class InputLabelDataset(Dataset):
         if "mask" not in dataset.column_names:
             print("'mask' column not found. Creating default mask of 1s.")
             self.dataset = self.dataset.map(
-                lambda example: {"mask": 1},
+                create_mask,
                 batched=False
             )
 

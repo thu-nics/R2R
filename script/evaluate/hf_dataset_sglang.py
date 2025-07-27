@@ -1049,9 +1049,9 @@ def main():
     print(f"Loading dataset: {args.dataset} from {args.dataset_path}")
     if args.dataset_config:
         print(f"Using dataset config: {args.dataset_config}")
-        dataset = load_dataset(args.dataset_path, args.dataset_config)
+        dataset = load_dataset(args.dataset_path, args.dataset_config, trust_remote_code=True)
     else:
-        dataset = load_dataset(args.dataset_path)
+        dataset = load_dataset(args.dataset_path, trust_remote_code=True)
     
     print(f"Preprocessing dataset as {args.dataset_config_dict['name']}")
         
