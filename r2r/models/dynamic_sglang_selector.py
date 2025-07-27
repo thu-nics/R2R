@@ -15,6 +15,7 @@ from r2r.utils.config import (
 from r2r.utils.switching import create_switching_strategy
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
+from r2r.utils.sampling import sample_token
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -329,7 +330,7 @@ class DynamicSimpleSGLangSelector:
 
         return next_token_ids
 
-    def decode_step(self, scheduler: Scheduler):
+    def decode_step(self, scheduler: Scheduler, temperature: float = 0.0, top_p: float = 1.0, top_k: int = -1):
         """
         Decode one step using the quick model
         
@@ -359,10 +360,10 @@ class DynamicSimpleSGLangSelector:
 
         # Get hidden states for the relevant positions
         hidden_states = result.logits_output.hidden_states[hidden_indices, :][:, None, :] # batch_size, 1, hidden_size
-        logits = result.logits_output.next_token_logits[:, None, :] # batch_size, 1, vocab_size
-        next_token_ids = result.next_token_ids # batch_size
+        logits = result.logits_output.next_token_logits # batch_size, vocab_size
+        next_token_ids = sample_token(logits, temperature=temperature, top_p=top_p, top_k=top_k)
 
-        return batch, hidden_states, logits, next_token_ids
+        return batch, hidden_states, logits[:, None, :], next_token_ids
 
     def update_output_ids(self, batch: ScheduleBatch, scheduler: Scheduler, next_token_ids: List[int]):
         """Update the output ids for the batch"""
@@ -429,8 +430,10 @@ class DynamicSimpleSGLangSelector:
             stop=[],
         )
 
+        # sglang will revise the output logits in-place if we set temperature > 0.0
+        # so we set temperature to 0.0 here and sample in the decode_step
         quick_sampling_params = SamplingParams(
-            temperature=temperature,
+            temperature=0.0,
             top_p=top_p,
             top_k=top_k,
             max_new_tokens=max_new_tokens,
@@ -471,7 +474,7 @@ class DynamicSimpleSGLangSelector:
                 break
 
             # Generate with quick model to get hidden states
-            batch, hidden_states, logits, next_token_ids = self.decode_step(self.quick_scheduler)
+            batch, hidden_states, logits, next_token_ids = self.decode_step(self.quick_scheduler, temperature=temperature, top_p=top_p, top_k=top_k)
 
             # Create a ModelOutputs object for switching strategy
             model_outputs = ModelOutputs(
