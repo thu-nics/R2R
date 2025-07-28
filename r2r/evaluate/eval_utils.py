@@ -194,7 +194,7 @@ def format_cot_example(example, including_answer=True):
 
 def generate_cot_prompt(val_df, curr, k):
     prompt = ""
-    with open(f"evaluate/eval_configs/mmlu-pro_initial_prompt.txt", "r") as fi:
+    with open(f"script/evaluate/eval_configs/mmlu-pro_initial_prompt.txt", "r") as fi:
         for line in fi.readlines():
             prompt += line
     subject = curr["category"]

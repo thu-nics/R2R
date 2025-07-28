@@ -755,7 +755,7 @@ def preprocess_dataset(dataset, dataset_config: Dict, save_result_dir: str) -> L
     
     if dataset_config.get("answer_type") == "mmlu-multiple-choice":
         full_test_df = preprocess(dataset["test"])
-        full_val_df = preprocess(dataset["validation"])
+        full_val_df = preprocess(dataset["validation"]) if "validation" in dataset else preprocess(dataset["test"])
         all_subjects = []
         for each in full_test_df:
             if each["category"] not in all_subjects:

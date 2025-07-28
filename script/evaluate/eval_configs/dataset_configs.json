@@ -89,5 +89,29 @@
         "answer_field": "public_test_cases",
         "prompt_template": "{question}",
         "description": "LiveCodeBench dataset"
+    },
+    "mmlu-pro_strange":{
+        "name": "MMLU-Pro",
+        "path": "GY2233/mmlu-pro-strange",
+        "answer_type": "mmlu-multiple-choice",
+        "id_field": "question_id",
+        "question_field": "question",
+        "answer_field": "answer",
+        "prompt_template": "",
+        "options_fields": "options",
+        "description": "Multiple-choice questions from MMLU-Pro dataset",
+        "selected_subjects": "all"
+    },
+    "mmlu-redux":{
+        "name": "MMLU-Redux",
+        "path": "GY2233/mmlu-redux",
+        "answer_type": "mmlu-multiple-choice",
+        "id_field": "question_id",
+        "question_field": "question",
+        "answer_field": "answer",
+        "prompt_template": "",
+        "options_fields": "options",
+        "description": "Multiple-choice questions from MMLU-Redux dataset",
+        "selected_subjects": "test"
     }
 }

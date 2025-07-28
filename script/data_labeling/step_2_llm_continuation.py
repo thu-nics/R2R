@@ -182,10 +182,11 @@ def main():
     # Use output_path from args
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
-    # convert args to json
-    args_json = args.__dict__
+    # convert args to json and append MODEL_DICT
+    args_json = args.__dict__.copy()
+    args_json['MODEL_DICT'] = MODEL_DICT
     with open(output_path / 'args.json', 'w') as f:
-        json.dump(args_json, f)
+        json.dump(args_json, f, indent=2)
     # Define output path at the start
     if args.low is not None and args.high is not None:
         results_filename = f"generation_results_data_{args.low}_to_{args.high}_real.csv"
