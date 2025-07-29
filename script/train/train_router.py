@@ -216,6 +216,7 @@ def train_model(
     valid_freq: int = 1,  # Add valid_freq parameter
     use_wandb: bool = False,
     checkpoint_dir: str = "output/checkpoints",
+    output_dir: str = "output/models",
 ) -> tuple[nn.Module, TrainingHistory]:
     """
     Train the model with early stopping and detailed within-epoch logging.
@@ -366,7 +367,7 @@ def train_model(
     model = history.load_best_model(model, device)
     
     # Plot training curves
-    history.plot_training_curves()
+    history.plot_training_curves(output_dir)
     
     # Return the model and history object (not just the dictionary)
     return model, history
@@ -773,11 +774,12 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
     optimizer = optim.AdamW(model.parameters(), lr=training_config["optimizer"]["lr"], weight_decay=training_config["optimizer"]["weight_decay"])
 
     # Calculate class weights with higher weight for critical class
+    label_column = training_config["loss"].get("label_column", "divergent")
     if training_config["loss"]["type"] == "BCEWithLogitsLoss":
         if training_config["loss"]["recall_factor"] is not None:
             print("Using class weights to balance recall")
-            n_class_0 = sum(1 for x in datasets["train"]["divergent"] if x == 0)
-            n_class_1 = sum(1 for x in datasets["train"]["divergent"] if x == 1)
+            n_class_0 = sum(1 for x in datasets["train"][label_column] if x == 0)
+            n_class_1 = sum(1 for x in datasets["train"][label_column] if x == 1)
             class_weights = torch.tensor(
                 [
                     1.0,  # Non-critical
@@ -804,8 +806,8 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
             gamma=training_config["loss"]["gamma"],
         )
     elif training_config["loss"]["type"] == "DPOLoss":
-        n_class_0 = sum(1 for x in datasets["train"]["divergent"] if x == 0)
-        n_class_1 = sum(1 for x in datasets["train"]["divergent"] if x == 1)
+        n_class_0 = sum(1 for x in datasets["train"][label_column] if x == 0)
+        n_class_1 = sum(1 for x in datasets["train"][label_column] if x == 1)
         criterion = DPOLoss(
             beta=training_config["loss"]["beta"],
             positive_prob=n_class_1 / (n_class_0 + n_class_1)
@@ -813,8 +815,8 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
     elif training_config["loss"]["type"] == "CrossEntropyLoss":
         if training_config["loss"]["recall_factor"] is not None:
             print("Using class weights to improve recall")
-            n_class_divergent = sum(1 for x, y in zip(datasets["train"]["divergent"], datasets["train"]["mismatch"]) if x == 1)
-            n_class_non_divergent_mismatch = sum(1 for x, y in zip(datasets["train"]["divergent"], datasets["train"]["mismatch"]) if x == 0 and y == 1)
+            n_class_divergent = sum(1 for x, y in zip(datasets["train"][label_column], datasets["train"]["mismatch"]) if x == 1)
+            n_class_non_divergent_mismatch = sum(1 for x, y in zip(datasets["train"][label_column], datasets["train"]["mismatch"]) if x == 0 and y == 1)
             n_class_match = sum(1 for x in datasets["train"]["mismatch"] if x == 0)
 
             # Calculate class weights with recall_factor applied to divergent class
@@ -857,6 +859,7 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
             valid_freq=valid_freq,  # Pass valid_freq to train_model
             use_wandb=use_wandb,
             checkpoint_dir=config["output"].get("checkpoint_dir", None),
+            output_dir=config["output"].get("output_dir", None),
         )
     else:
         print("Validating model only")
@@ -869,6 +872,13 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
 
     all_probs, all_labels, all_filters = get_probabilities_and_labels(model, test_loader, device, input_type, output_type=output_type)
 
+    # Get output directory for saving plots and data
+    output_config = config["output"]
+    output_dir = output_config["output_dir"]
+    
+    # Create output directory early to ensure it exists for all plotting functions
+    os.makedirs(output_dir, exist_ok=True)
+    
     is_skip_optimization = (optimizing_config["type"] == "skip")
     if not is_skip_optimization:
         pre_opt_accuracy, pre_opt_precision, pre_opt_recall, pre_opt_f1, pre_opt_positive_rate = standard_eval_pipeline(all_probs, all_labels, all_filters)
@@ -876,7 +886,8 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
             all_probs,
             all_labels,
             all_filters,
-            optimizing_config = optimizing_config
+            optimizing_config = optimizing_config,
+            output_dir = output_dir
         )  
     else:
         print("Skipping threshold optimization")
@@ -890,10 +901,7 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
     )      
 
     """Output"""
-    output_config = config["output"]
-
-    output_dir = output_config["output_dir"]
-    os.makedirs(output_dir, exist_ok=True)
+    # output_dir was already defined above for optimization_pipeline and directory created
     model_name = output_config["model_name"] if output_config["model_name"] is not None else f"classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
     model_path = os.path.join(output_dir, model_name) 
 
@@ -942,8 +950,9 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
 
     print(f"Training results saved to {config_path}")
 
-    # Plot training curves using the history object's method
-    history.plot_training_curves()
+    # Plot training curves using the history object's method with correct file path
+    training_curves_path = os.path.join(output_dir, "training_curves.png")
+    history.plot_training_curves(training_curves_path)
 
     # Log images and model artifact to wandb
     # history.log_model_artifact(model_path, config_path)

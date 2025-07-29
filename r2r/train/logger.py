@@ -270,6 +270,7 @@ def print_evaluation_results(
     y_test: Union[np.ndarray, torch.Tensor],
     predictions: Union[np.ndarray, torch.Tensor],
     probabilities: Union[np.ndarray, torch.Tensor],
+    output_dir: str = "."
 ) -> None:
     """Print detailed evaluation results with focus on recall and positive prediction rate."""
     # Print confusion matrix values - convert to numpy arrays if they're tensors
@@ -329,7 +330,10 @@ def print_evaluation_results(
     plt.title("Confusion Matrix")
     plt.ylabel("True Label")
     plt.xlabel("Predicted Label")
-    plt.savefig("confusion_matrix.png", bbox_inches="tight", dpi=300)
+    confusion_matrix_path = os.path.join(output_dir, "confusion_matrix.png")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(confusion_matrix_path, bbox_inches="tight", dpi=300)
     plt.close()
 
     return accuracy, precision, recall, f1, positive_rate
@@ -337,7 +341,8 @@ def print_evaluation_results(
 def plot_positive_rate_recall_curve(
     y_true: Union[np.ndarray, torch.Tensor],
     probabilities: Union[np.ndarray, torch.Tensor],
-    current_threshold: Optional[float] = None
+    current_threshold: Optional[float] = None,
+    output_dir: str = "."
 ) -> None:
     """
     Plot the positive prediction rate vs recall curve with varied thresholds.
@@ -346,6 +351,7 @@ def plot_positive_rate_recall_curve(
         y_true: True binary labels
         probabilities: Predicted probabilities
         current_threshold: Current threshold to highlight on the curve (optional)
+        output_dir: Directory to save the output files
     """
     # Calculate metrics at different thresholds
     thresholds = np.linspace(0.01, 0.99, 100)
@@ -409,11 +415,12 @@ def plot_positive_rate_recall_curve(
 
     # Save the figure
     plt.tight_layout()
-    plt.savefig(f"positive_rate_recall_curve.png", bbox_inches="tight", dpi=300)
+    png_file_path = os.path.join(output_dir, "positive_rate_recall_curve.png")
+    plt.savefig(png_file_path, bbox_inches="tight", dpi=300)
     plt.close()
 
     print(
-        f"Positive Rate vs Recall curve saved as 'positive_rate_recall_curve.png'"
+        f"Positive Rate vs Recall curve saved as '{png_file_path}'"
     )
 
     # Save data to CSV using pandas DataFrame
@@ -422,7 +429,7 @@ def plot_positive_rate_recall_curve(
         'Positive Rate': positive_rates,
         'Recall': recalls
     })
-    csv_file_path = "positive_rate_recall_data.csv"
+    csv_file_path = os.path.join(output_dir, "positive_rate_recall_data.csv")
     df_data.to_csv(csv_file_path, index=False)
     
     print(f"Positive Rate vs Recall data saved as '{csv_file_path}'")

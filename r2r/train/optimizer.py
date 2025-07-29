@@ -198,14 +198,14 @@ def standard_eval_pipeline(
 
     mask = (all_filters == 1)
     default_predictions = (all_probs >= 0.5).astype(int)
-    print_evaluation_results(
+    accuracy, precision, recall, f1, positive_rate = print_evaluation_results(
         all_labels, default_predictions, all_probs
     )
 
     print("=" * 60)
     print(f"Using {sum(mask)}/{len(mask)} samples within mismatches.")
     
-    accuracy, precision, recall, f1, positive_rate = print_evaluation_results(
+    print_evaluation_results(
         filtered_labels, filtered_predictions, filtered_probs
     )
 
@@ -215,7 +215,8 @@ def optimization_pipeline(
     all_probs,
     all_labels,
     all_filters,
-    optimizing_config
+    optimizing_config,
+    output_dir: str = "."
 ):  
     mask = (all_filters == 1)
     filtered_probs = all_probs[mask]
@@ -251,7 +252,7 @@ def optimization_pipeline(
 
     predictions = (all_probs >= best_threshold).astype(int)
     accuracy, precision, recall, f1, positive_rate = print_evaluation_results(
-        all_labels, predictions, all_probs
+        all_labels, predictions, all_probs, output_dir
     )
 
     # Use filtered data for final evaluation
@@ -259,7 +260,7 @@ def optimization_pipeline(
     print("=" * 60)
     print(f"Using {sum(mask)}/{len(mask)} samples within mismatches.")
     print_evaluation_results(
-        filtered_labels, filtered_predictions, filtered_probs
+        filtered_labels, filtered_predictions, filtered_probs, output_dir
     )
 
     # Plot positive rate vs recall curve with the optimal threshold
@@ -267,6 +268,7 @@ def optimization_pipeline(
         y_true=all_labels,
         probabilities=all_probs,
         current_threshold=best_threshold,
+        output_dir=output_dir,
     )
 
     return best_threshold, accuracy, precision, recall, f1, positive_rate, is_succeded
