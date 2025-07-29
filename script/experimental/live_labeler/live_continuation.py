@@ -16,6 +16,7 @@ from r2r.models.sglang_wrapper import SGLangWrapper
 from r2r.utils.config import MODEL_DICT, TOKEN
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.data.live_labeler import LiveDivergentLabeler
+from r2r.evaluate.eval_utils import extract_boxed_answer
 
 
 def launch_models(gpu_ids: List[int] = [0, 1], disable_cuda_graph: bool = True) -> Tuple[SGLangWrapper, SGLangWrapper]:
@@ -455,6 +456,7 @@ def load_problems(
     return problems, loaded_ids
     
 
+
 def create_sequence_summary(input_csv_path: str, output_csv_path: str):
     """
     Processes a detailed live continuation results CSV to create a summary CSV 
@@ -484,9 +486,25 @@ def create_sequence_summary(input_csv_path: str, output_csv_path: str):
         mismatch_rate = group['is_mismatch'].mean()
         # Assuming TOKEN.DIVERGENT == 1 based on typical usage
         divergent_rate = (group['usage_type'] == TOKEN.DIVERGENT).mean() 
+        output_tokens = len(group)  # Count of rows (tokens) for this data_id
+        
+        # Calculate model_params using formula: SLM_params + divergent_rate * LLM_params
+        slm_params = float(MODEL_DICT['quick']['param'])  # Small Language Model params
+        llm_params = float(MODEL_DICT['reference']['param'])  # Large Language Model params
+        model_params = slm_params + divergent_rate * llm_params
+        
+        # Extract predicted answer from model output
+        predicted_answer, has_extracted_answer = extract_boxed_answer(model_output)
         
         summary_data.append({
-            "ID": data_id,
+            "problem_id": data_id,
+            "model_name": "live_continuation",  # Could be made configurable
+            "has_extracted_answer": has_extracted_answer,
+            "predicted_answer": predicted_answer,
+            "output_tokens": output_tokens,
+            "total_tokens": "",  # Would need input_tokens to calculate
+            "run_time": "",  # Would need to be tracked separately
+            "model_params": model_params,
             "model_output": model_output,
             "mismatch_rate": mismatch_rate,
             "divergent_rate": divergent_rate
@@ -506,6 +524,44 @@ def create_sequence_summary(input_csv_path: str, output_csv_path: str):
         print(f"Error writing summary CSV {output_csv_path}: {e}")
 
 
+def convert_intermediate_to_summary(input_csv_path: str, output_csv_path: str = None):
+    """
+    Convert intermediate live continuation results to a summary CSV.
+    This function reuses the existing create_sequence_summary function.
+    
+    Args:
+        input_csv_path: Path to the intermediate results CSV file
+        output_csv_path: Path to save the summary CSV file. If None, will be auto-generated
+    """
+    if not os.path.exists(input_csv_path):
+        print(f"Error: Input CSV file not found: {input_csv_path}")
+        return
+    
+    # Auto-generate output path if not provided
+    if output_csv_path is None:
+        input_dir = os.path.dirname(input_csv_path)
+        input_filename = os.path.basename(input_csv_path)
+        
+        # Extract timestamp from filename if present
+        if "live_continuation_results_" in input_filename:
+            timestamp_part = input_filename.replace("live_continuation_results_", "").replace(".csv", "")
+            output_filename = f"live_continuation_summary_{timestamp_part}.csv"
+        else:
+            # Use current timestamp if no timestamp found in filename
+            timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+            output_filename = f"live_continuation_summary_{timestamp}.csv"
+        
+        output_csv_path = os.path.join(input_dir, output_filename)
+    
+    print(f"Converting intermediate results from: {input_csv_path}")
+    print(f"Summary will be saved to: {output_csv_path}")
+    
+    # Reuse the existing create_sequence_summary function
+    create_sequence_summary(input_csv_path, output_csv_path)
+    
+    print(f"Conversion completed successfully!")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Live continuation with quick and reference models")
     parser.add_argument("--gpu_ids", type=int, nargs="+", default=[0, 1], help="GPU IDs to use")
@@ -517,7 +573,14 @@ def main():
     parser.add_argument("--output_dir", type=str, default="output/live_continuation", help="Directory to save the results")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for processing texts")
     parser.add_argument("--limit", type=int, default=None, help="Limit the number of texts to process")
+    parser.add_argument("--convert_to_summary", type=str, help="Convert intermediate results CSV to summary CSV")
+    parser.add_argument("--summary_output", type=str, help="Output path for summary CSV (used with --convert_to_summary)")
     args = parser.parse_args()
+    
+    # Handle conversion mode
+    if args.convert_to_summary:
+        convert_intermediate_to_summary(args.convert_to_summary, args.summary_output)
+        return
     
     # Create timestamp for filename
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -530,7 +593,27 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Load all texts
-    example_problem_ids = ["2024-I-1"] 
+    example_problem_ids = [
+        "2024-I-4",
+        "2024-II-4",
+        "2024-II-6",
+        "2024-I-1",
+        "2024-I-3",
+        "2024-II-10",
+        "2024-II-12",
+        "2024-I-7",
+        "2024-I-6",
+        "2024-I-2",
+        "2024-I-14",
+        "2024-II-3",
+        "2024-I-15",
+        "2024-I-9",
+        "2024-II-7",
+        "2024-I-13",
+        "2024-II-13"
+    ]
+
+
     example_dataset_path = "Maxwell-Jia/AIME_2024" # Example dataset
     example_dataset_key = "Problem" # Example key for problem text
 
@@ -555,7 +638,7 @@ def main():
         verify_model_name=MODEL_DICT['verify']['model_path'],
         verify_mode="common_context",
         continuation_max_new_tokens=128,
-        verifier_max_new_tokens=512,
+        verifier_max_new_tokens=16,
         num_samples=1,
         num_continuation=1,
         previous_context=0
