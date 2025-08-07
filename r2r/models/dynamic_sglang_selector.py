@@ -4,6 +4,7 @@ from tqdm import tqdm
 from typing import Optional, Tuple, Union, List
 import multiprocessing as mp
 import torch.distributed as dist
+import queue
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
@@ -183,7 +184,7 @@ class DynamicSimpleSGLangSelector:
         )
 
         while True:
-            reqs: Union[List[Req], int] = input_queue.get()
+            reqs = input_queue.get()
             if isinstance(reqs, int):
                 # terminate the process
                 break
@@ -194,8 +195,9 @@ class DynamicSimpleSGLangSelector:
                     ack_queue.put(end_of_cache_loc)
                     continue
             else:
+                input_indices, req_list = reqs
                 new_batch = ScheduleBatch.init_new(
-                    reqs,
+                    req_list,
                     scheduler.req_to_token_pool,
                     scheduler.token_to_kv_pool_allocator,
                     scheduler.tree_cache,
@@ -210,7 +212,7 @@ class DynamicSimpleSGLangSelector:
                 next_token_ids_list = next_token_ids.tolist()
 
                 if rank == 0:
-                    output_queue.put(next_token_ids_list)
+                    output_queue.put((input_indices, next_token_ids_list))
 
     def init_model_switching_strategy(self):
         """Initialize or reinitialize the model switching strategy with stored parameters"""
@@ -321,14 +323,36 @@ class DynamicSimpleSGLangSelector:
             reqs.append(req)
 
         for q in self.reference_model_input_queues:
-            q.put_nowait(reqs)
-        next_token_ids = self.reference_model_output_queue.get()
+            q.put_nowait((input_indices, reqs))
+        _, next_token_ids = self.reference_model_output_queue.get()
 
         # Update prefix indices for each prompt
         for i in range(subset_batch_size):
             self.reference_prefix_indices_list[input_indices[i]]=list(range(len(input_ids[i])))
 
         return next_token_ids
+
+    def extend_step_async(self, input_ids: List[List[int]], input_indices: List[int], sampling_params: SamplingParams) -> None:
+        """Send requests to the reference model without waiting for the result."""
+        input_texts = self.tokenizer.batch_decode(input_ids)
+        reqs = []
+        for i, (input_text, input_id) in enumerate(zip(input_texts, input_ids)):
+            req = Req(
+                rid=input_indices[i],
+                origin_input_text=input_text,
+                origin_input_ids=input_id,
+                sampling_params=sampling_params,
+                eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
+                return_hidden_states=False,
+            )
+            req.sampling_params.normalize(None)
+            req.prefix_indices = self.reference_prefix_indices_list[input_indices[i]]
+            req.fill_ids = input_id
+            req.extend_input_len = len(input_id) - len(self.reference_prefix_indices_list[input_indices[i]])
+            reqs.append(req)
+
+        for q in self.reference_model_input_queues:
+            q.put_nowait((input_indices, reqs))
 
     def decode_step(self, scheduler: Scheduler, temperature: float = 0.0, top_p: float = 1.0, top_k: int = -1):
         """
@@ -365,11 +389,21 @@ class DynamicSimpleSGLangSelector:
 
         return batch, hidden_states, logits[:, None, :], next_token_ids
 
-    def update_output_ids(self, batch: ScheduleBatch, scheduler: Scheduler, next_token_ids: List[int]):
+    def update_output_ids(
+        self,
+        batch: ScheduleBatch,
+        scheduler: Scheduler,
+        next_token_ids: List[int],
+        abort_indices: Optional[List[int]] = None,
+    ):
         """Update the output ids for the batch"""
         batch.output_ids = next_token_ids
+        abort_set = set(abort_indices or [])
 
-        for req, next_token_id in zip(batch.reqs, next_token_ids):
+        for i, (req, next_token_id) in enumerate(zip(batch.reqs, next_token_ids)):
+            if i in abort_set:
+                scheduler.abort_request(req)
+                continue
             if next_token_id in self.quick_scheduler.model_config.hf_eos_token_id:
                 scheduler.abort_request(req)
             req.output_ids.append(next_token_id.item())
@@ -378,6 +412,61 @@ class DynamicSimpleSGLangSelector:
                 scheduler.tree_cache.cache_finished_req(req)
 
         scheduler.last_batch = batch
+
+    def _process_reference_outputs(
+        self,
+        token_manager: SGLangTokenManager,
+        sampling_params: SamplingParams,
+        recorders: Optional[List[GenerationRecorder]] = None,
+        print_tokens: bool = False,
+        blocking: bool = False,
+    ) -> bool:
+        """Fetch completed LLM outputs and merge them back to the quick model."""
+        processed = False
+        while True:
+            try:
+                item = (
+                    self.reference_model_output_queue.get()
+                    if blocking
+                    else self.reference_model_output_queue.get_nowait()
+                )
+            except queue.Empty:
+                break
+
+            input_indices, tokens = item
+            for idx, token in zip(input_indices, tokens):
+                seq, finished = token_manager.resume_sequence(idx, token)
+                self.reference_prefix_indices_list[idx] = list(range(len(seq["current_ids"])))
+
+                if recorders is not None:
+                    token_str = self.tokenizer.decode(token)
+                    recorders[idx].add_record(
+                        GenerationRecord(
+                            token_id=token,
+                            token_str=token_str,
+                            source_model="reference",
+                            position=len(seq["output_ids"]) - 1,
+                            batch_id=idx,
+                            param_size=float(MODEL_DICT["reference"]["param"]),
+                        )
+                    )
+                    if print_tokens and idx == 0:
+                        print(f"{REFERENCE_COLOR}{token_str}{RESET}", end="", flush=True)
+
+                if not finished:
+                    req = Req(
+                        rid=str(uuid.uuid4()),
+                        origin_input_text=self.tokenizer.decode(seq["input_ids"]),
+                        origin_input_ids=seq["current_ids"],
+                        sampling_params=sampling_params,
+                        eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
+                        return_hidden_states=True,
+                    )
+                    self.quick_scheduler.waiting_queue.append(req)
+
+            processed = True
+
+        return processed
 
     def generate(
         self,
@@ -464,99 +553,67 @@ class DynamicSimpleSGLangSelector:
         if not print_tokens:
             # Create tqdm progress bar for token generation
             pbar = tqdm(total=max_new_tokens, desc="Dynamic SGLang: Generating tokens", leave=True)
-        while not token_manager.is_generation_complete() and position < max_new_tokens:
+        while (not token_manager.is_generation_complete() or token_manager.has_suspended()) and position < max_new_tokens:
             if not print_tokens:
                 pbar.update(1)
 
             active_count = token_manager.get_active_count()
 
-            if active_count < 1:
-                break
+            if active_count == 0:
+                # Wait for reference outputs when no active sequences
+                self._process_reference_outputs(
+                    token_manager,
+                    quick_sampling_params,
+                    recorders,
+                    print_tokens,
+                    blocking=True,
+                )
+                continue
 
-            # Generate with quick model to get hidden states
-            batch, hidden_states, logits, next_token_ids = self.decode_step(self.quick_scheduler, temperature=temperature, top_p=top_p, top_k=top_k)
+            # Process any finished reference outputs
+            self._process_reference_outputs(
+                token_manager,
+                quick_sampling_params,
+                recorders,
+                print_tokens,
+                blocking=False,
+            )
 
-            # Create a ModelOutputs object for switching strategy
+            batch, hidden_states, logits, next_token_ids = self.decode_step(
+                self.quick_scheduler,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
+
             model_outputs = ModelOutputs(
                 logits=logits,
-                hidden_states=[hidden_states],  # dummy layer dimension
+                hidden_states=[hidden_states],
                 token=next_token_ids[:, None],
             )
 
-            # Use switching strategy to decide which model to use for each input
             model_choices = self.switching_strategy.route(model_outputs)
-
-            # Check if reference model is needed for any prompt
             reference_needed = torch.any(model_choices).item()
+            active_to_original = token_manager.get_active_index()
 
             if reference_needed:
-                # Get indices of inputs that need reference model as a list
                 reference_indices = torch.where(model_choices == 1)[0].tolist()
-                active_to_original = token_manager.get_active_index()
                 reference_original_indices = [active_to_original[i] for i in reference_indices]
                 reference_input_ids = token_manager.fetch_active_input_ids(reference_indices)
 
-                # Generate with reference model for inputs that need it
-                reference_outputs = self.extend_step(
+                self.extend_step_async(
                     input_ids=reference_input_ids,
                     input_indices=reference_original_indices,
                     sampling_params=reference_sampling_params,
                 )
-                for i, reference_output_token in enumerate(reference_outputs):
-                    next_token_ids[reference_indices[i]] = reference_output_token
 
-                # Combine outputs based on model choices
-                # Record if needed
                 if record_generation and recorders:
                     for i in range(active_count):
-                        if model_choices[i].item() == 1:  # Use reference model
-                            # update next token ids
-                            source_model = "reference"
-                            param_size = float(MODEL_DICT["reference"]["param"])
-                        else:  # Use quick model
-                            source_model = "quick"
-                            param_size = float(MODEL_DICT["quick"]["param"])
-
+                        if i in reference_indices:
+                            continue
+                        seq_idx = active_to_original[i]
                         token = next_token_ids[i].item()
                         token_str = self.tokenizer.decode(token)
-
-                        # Add record
-                        active_indicies = token_manager.get_active_index()
-                        seq_idx = active_indicies[i]
-                        recorders[seq_idx].add_record(
-                            GenerationRecord(
-                                token_id=token,
-                                token_str=token_str,
-                                source_model=source_model,
-                                position=position,
-                                batch_id=seq_idx,
-                                param_size=param_size,
-                            )
-                        )
-
-                        # Print tokens if requested
-                        if (
-                            print_tokens and seq_idx == 0
-                        ):  # Only print for the first batch
-                            color = (
-                                REFERENCE_COLOR
-                                if source_model == "reference"
-                                else QUICK_COLOR
-                            )
-                            print(f"{color}{token_str}{RESET}", end="", flush=True)
-
-            else:
-                # Use quick model for all outputs
-                # Record if needed
-                if record_generation and recorders:
-                    for i in range(active_count):
-                        token = next_token_ids[i].item()
-                        token_str = self.tokenizer.decode(token)
-
-                        # Find original batch index
-                        seq_idx = token_manager.get_active_index()[i]
-
-                        # Add record
                         recorders[seq_idx].add_record(
                             GenerationRecord(
                                 token_id=token,
@@ -567,17 +624,58 @@ class DynamicSimpleSGLangSelector:
                                 param_size=float(MODEL_DICT["quick"]["param"]),
                             )
                         )
-
-                        # Print tokens if requested
-                        if (
-                            print_tokens and seq_idx == 0
-                        ):  # Only print for the first batch
+                        if print_tokens and seq_idx == 0:
                             print(f"{QUICK_COLOR}{token_str}{RESET}", end="", flush=True)
 
-            # Update token manager with final outputs
-            self.update_output_ids(batch, self.quick_scheduler, next_token_ids)
-            token_manager.update_sequences_direct([token_id.item() for token_id in next_token_ids])
+                self.update_output_ids(
+                    batch,
+                    self.quick_scheduler,
+                    next_token_ids,
+                    abort_indices=reference_indices,
+                )
+                token_manager.suspend_sequences_by_active_indices(reference_indices)
+                filtered_tokens = [
+                    next_token_ids[i].item()
+                    for i in range(active_count)
+                    if i not in reference_indices
+                ]
+                if filtered_tokens:
+                    token_manager.update_sequences_direct(filtered_tokens)
+            else:
+                if record_generation and recorders:
+                    for i in range(active_count):
+                        seq_idx = active_to_original[i]
+                        token = next_token_ids[i].item()
+                        token_str = self.tokenizer.decode(token)
+                        recorders[seq_idx].add_record(
+                            GenerationRecord(
+                                token_id=token,
+                                token_str=token_str,
+                                source_model="quick",
+                                position=position,
+                                batch_id=seq_idx,
+                                param_size=float(MODEL_DICT["quick"]["param"]),
+                            )
+                        )
+                        if print_tokens and seq_idx == 0:
+                            print(f"{QUICK_COLOR}{token_str}{RESET}", end="", flush=True)
+
+                self.update_output_ids(batch, self.quick_scheduler, next_token_ids)
+                token_manager.update_sequences_direct(
+                    [token_id.item() for token_id in next_token_ids]
+                )
+
             position += 1
+
+        # Ensure any pending reference results are processed
+        if token_manager.has_suspended():
+            self._process_reference_outputs(
+                token_manager,
+                quick_sampling_params,
+                recorders,
+                print_tokens,
+                blocking=True,
+            )
 
         # Get final outputs from token manager
         final_results = token_manager.get_final_outputs()
