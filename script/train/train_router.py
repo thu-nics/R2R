@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from datasets import load_from_disk, load_dataset, concatenate_datasets
+from datasets import load_from_disk, load_dataset, concatenate_datasets, Value, Sequence
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
@@ -441,6 +441,18 @@ class InputLabelDataset(Dataset):
             *([self.token_col] if self.use_token else []),
         ]
 
+        # One-time type casting so tensors are already in the correct dtype
+        self.dataset = self.dataset.cast_column(self.label_column, Value("int64"))
+        self.dataset = self.dataset.cast_column("mismatch", Value("int64"))
+        self.dataset = self.dataset.cast_column("mask", Value("int64"))
+
+        if self.use_logits and self.logits_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.logits_col, Sequence(Value("float32")))
+        if self.use_hidden_states and self.hidden_states_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.hidden_states_col, Sequence(Value("float32")))
+        if self.use_token and self.token_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.token_col, Value("int64"))
+
         # Convert dataset to PyTorch tensors
         self.dataset.set_format(type="torch", columns=columns)
         
@@ -463,19 +475,17 @@ class InputLabelDataset(Dataset):
     def __getitem__(self, idx):
         row = self.dataset[idx]
 
-        # Get pre-converted label and filter
-        label = row[self.label_column].long()
-        filter_var = row["mismatch"].long()
-        mask = row["mask"].long()
+        label = row[self.label_column]
+        filter_var = row["mismatch"]
+        mask = row["mask"]
         
-        # Prepare inputs using pre-converted tensors (no type conversion needed)
         inputs = {}
         if self.use_logits:
-            inputs["logits"] = row[self.logits_col].float()
+            inputs["logits"] = row[self.logits_col]
         if self.use_hidden_states:
-            inputs["hidden_states"] = row[self.hidden_states_col].float()
+            inputs["hidden_states"] = row[self.hidden_states_col]
         if self.use_token:
-            inputs["token"] = row[self.token_col].long()
+            inputs["token"] = row[self.token_col]
         
         return inputs, label, filter_var, mask
 
