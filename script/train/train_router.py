@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from datasets import load_from_disk, load_dataset, concatenate_datasets
+from datasets import load_from_disk, load_dataset, concatenate_datasets, Value, Sequence
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
@@ -130,7 +130,7 @@ def validate_model(
             # Forward pass
             outputs = model(**inputs)
 
-            labels = labels.to(device)
+            labels = labels.to(device).float()
             filters = filters.to(device)
             
             # Calculate loss
@@ -278,7 +278,7 @@ def train_model(
             optimizer.zero_grad()
             outputs = model(**inputs)
 
-            labels = labels.to(device)
+            labels = labels.to(device).float()
 
             if output_type == "binary":
                 loss = criterion(outputs, labels.unsqueeze(1))
@@ -431,62 +431,62 @@ class InputLabelDataset(Dataset):
             columns.append(self.hidden_states_col)
         if self.use_token:
             columns.append(self.token_col)
-            
+
+        # Convert input to columns
+        columns = [
+            self.label_column,
+            "mismatch",
+            "mask",
+            *([self.logits_col] if self.use_logits else []),
+            *([self.hidden_states_col] if self.use_hidden_states else []),
+            *([self.token_col] if self.use_token else []),
+        ]
+
+        # One-time type casting so tensors are already in the correct dtype
+        self.dataset = self.dataset.cast_column(self.label_column, Value("int64"))
+        self.dataset = self.dataset.cast_column("mismatch", Value("int64"))
+        self.dataset = self.dataset.cast_column("mask", Value("int64"))
+
+        if self.use_logits and self.logits_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.logits_col, Sequence(Value("float32")))
+        if self.use_hidden_states and self.hidden_states_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.hidden_states_col, Sequence(Value("float32")))
+        if self.use_token and self.token_col in self.dataset.column_names:
+            self.dataset = self.dataset.cast_column(self.token_col, Value("int64"))
+
         # Convert dataset to PyTorch tensors
-        # columns.append("small_mid_hidden_states")
-        self.dataset.set_format(type='torch', columns=columns)
-        
-        # Pre-convert tensors to the correct data types
-        # Create new versions of the columns with the right types
-        converted_dataset = {}
-        
-        # Convert label and filter columns
-        converted_dataset[self.label_column] = self.dataset[self.label_column].float()
-        converted_dataset["mismatch"] = self.dataset["mismatch"].float()
-        converted_dataset["mask"] = self.dataset["mask"].float()
-        
-        # Convert input columns
-        if self.use_logits:
-            converted_dataset[self.logits_col] = self.dataset[self.logits_col].float()
-        if self.use_hidden_states:
-            converted_dataset[self.hidden_states_col] = self.dataset[self.hidden_states_col].float()
-            # concat here
-            # converted_dataset[self.hidden_states_col] = torch.cat([self.dataset[self.hidden_states_col].float(), self.dataset["small_mid_hidden_states"].float()], dim=-1)
-        if self.use_token:
-            converted_dataset[self.token_col] = self.dataset[self.token_col].long()
-        
-        # Replace the dataset with the converted version
-        self.converted_dataset = converted_dataset
+        self.dataset.set_format(type="torch", columns=columns)
         
         # Print dataset info
         print(f"Dataset prepared with {len(self.dataset)} samples.")
         print(f"Using input types: {self.input_type}")
         
         # Print tensor shapes for debugging
+        sample = self.dataset[0]  # a dict of torch.Tensors
         if self.use_logits:
-            print(f"Logits shape: {self.converted_dataset[self.logits_col].shape}")
+            print(f"Logits shape: {sample[self.logits_col].shape}")
         if self.use_hidden_states:
-            print(f"Hidden states shape: {self.converted_dataset[self.hidden_states_col].shape}")
+            print(f"Hidden states shape: {sample[self.hidden_states_col].shape}")
         if self.use_token:
-            print(f"Token shape: {self.converted_dataset[self.token_col].shape}")
+            print(f"Token shape: {sample[self.token_col].shape}")
             
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx):
-        # Get pre-converted label and filter
-        label = self.converted_dataset[self.label_column][idx]
-        filter_var = self.converted_dataset["mismatch"][idx]
-        mask = self.converted_dataset["mask"][idx]
+        row = self.dataset[idx]
+
+        label = row[self.label_column]
+        filter_var = row["mismatch"]
+        mask = row["mask"]
         
-        # Prepare inputs using pre-converted tensors (no type conversion needed)
         inputs = {}
         if self.use_logits:
-            inputs["logits"] = self.converted_dataset[self.logits_col][idx]
+            inputs["logits"] = row[self.logits_col]
         if self.use_hidden_states:
-            inputs["hidden_states"] = self.converted_dataset[self.hidden_states_col][idx]
+            inputs["hidden_states"] = row[self.hidden_states_col]
         if self.use_token:
-            inputs["token"] = self.converted_dataset[self.token_col][idx]
+            inputs["token"] = row[self.token_col]
         
         return inputs, label, filter_var, mask
 
