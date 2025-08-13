@@ -1,5 +1,5 @@
 import torch
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from transformers import PreTrainedTokenizer
 
 class SGLangTokenManager:
@@ -41,6 +41,9 @@ class SGLangTokenManager:
         # This avoids creating a new list every time get_active_input_ids is called
         self.active_input_ids: List[List[int]] = []
         
+        # Dictionary to store sequences that are temporarily paused
+        self.suspended_sequences: Dict[int, Dict[str, Any]] = {}
+
         # Initialize sequences
         self.prepare_sequences()
         
@@ -89,6 +92,61 @@ class SGLangTokenManager:
         Fetch active input ids for given indices.
         """
         return [self.active_input_ids[i] for i in index]
+
+    def has_suspended(self) -> bool:
+        """Return True if there are suspended sequences awaiting processing."""
+        return len(self.suspended_sequences) > 0
+
+    def suspend_sequences_by_active_indices(self, indices: List[int]) -> None:
+        """Temporarily remove sequences at the given active indices.
+
+        Args:
+            indices: List of indices (relative to current active sequences)
+                that should be suspended.
+        """
+        if not indices:
+            return
+        indices_set = set(indices)
+        new_active_sequences = []
+        new_active_input_ids = []
+        for i, seq in enumerate(self.active_sequences):
+            if i in indices_set:
+                orig_idx = seq["original_index"]
+                self.suspended_sequences[orig_idx] = seq
+            else:
+                new_active_sequences.append(seq)
+                new_active_input_ids.append(self.active_input_ids[i])
+        self.active_sequences = new_active_sequences
+        self.active_input_ids = new_active_input_ids
+
+    def resume_sequence(self, original_index: int, generated_token: int) -> Tuple[Dict[str, Any], bool]:
+        """Resume a suspended sequence by appending a token.
+
+        Args:
+            original_index: Original index of the sequence to resume.
+            generated_token: Token produced by the reference model.
+
+        Returns:
+            Tuple containing the resumed sequence and a boolean indicating
+            whether the sequence is finished after adding the token.
+        """
+        seq = self.suspended_sequences.pop(original_index)
+        seq["output_ids"].append(generated_token)
+        seq["current_ids"].append(generated_token)
+
+        finished = (
+            generated_token == self.eos_token_id
+            or len(seq["output_ids"]) >= self.max_new_tokens
+        )
+
+        if finished:
+            seq["is_finished"] = True
+            self.finished_sequences.append(seq)
+        else:
+            self.active_sequences.append(seq)
+            self.active_input_ids.append(seq["current_ids"])
+
+        return seq, finished
     
     def update_sequences_engine(self, outputs: List[Dict[str, Any]]) -> bool:
         """
