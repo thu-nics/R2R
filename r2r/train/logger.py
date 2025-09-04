@@ -330,7 +330,7 @@ def print_evaluation_results(
     plt.title("Confusion Matrix")
     plt.ylabel("True Label")
     plt.xlabel("Predicted Label")
-    confusion_matrix_path = os.path.join(output_dir, "confusion_matrix.png")
+    confusion_matrix_path = os.path.join(output_dir, "confusion_matrix_1.png")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     plt.savefig(confusion_matrix_path, bbox_inches="tight", dpi=300)
@@ -752,7 +752,12 @@ class TrainingHistory:
         plt.legend()
         
         plt.tight_layout()
+
+        dirpath = os.path.dirname(output_file)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
         plt.savefig(output_file)
+
         plt.close()
         
         print(f"Training curves saved to {output_file}")
