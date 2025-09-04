@@ -367,7 +367,8 @@ def train_model(
     model = history.load_best_model(model, device)
     
     # Plot training curves
-    history.plot_training_curves(output_dir)
+    training_curves_path = os.path.join(output_dir, "training_curves.png")
+    history.plot_training_curves(training_curves_path)
     
     # Return the model and history object (not just the dictionary)
     return model, history
