@@ -68,8 +68,8 @@
     "min_recall": 0.95
   },
   "output": {
-    "output_dir": "resource/default_router_qwen3_1_7b.pt",
-    "checkpoint_dir": "output/checkpoint_qwen3_1_7b",
+    "output_dir": "resource/default_router_qwen3_0_6b.pt",
+    "checkpoint_dir": "output/checkpoint_qwen3_0_6b",
     "model_name": null
   }
 }
