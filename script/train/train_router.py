@@ -882,7 +882,12 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
     
     is_skip_optimization = (optimizing_config["type"] == "skip")
     if not is_skip_optimization:
-        pre_opt_accuracy, pre_opt_precision, pre_opt_recall, pre_opt_f1, pre_opt_positive_rate = standard_eval_pipeline(all_probs, all_labels, all_filters)
+        pre_opt_accuracy, pre_opt_precision, pre_opt_recall, pre_opt_f1, pre_opt_positive_rate = standard_eval_pipeline(
+            all_probs,
+            all_labels,
+            all_filters,
+            output_dir = output_dir, 
+            filename = "confusion_matrix_pre_opt.png")
         best_threshold, accuracy, precision, recall, f1, positive_rate, is_succeded = optimization_pipeline(
             all_probs,
             all_labels,
@@ -892,7 +897,7 @@ def main(config: dict, use_wandb: bool = False, validate_model_path: Optional[st
         )  
     else:
         print("Skipping threshold optimization")
-        accuracy, precision, recall, f1, positive_rate = standard_eval_pipeline(all_probs, all_labels, all_filters)
+        accuracy, precision, recall, f1, positive_rate = standard_eval_pipeline(all_probs, all_labels, all_filters, output_dir = output_dir)
         best_threshold = 0.5
         is_succeded = True
 

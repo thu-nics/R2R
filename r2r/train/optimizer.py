@@ -184,7 +184,9 @@ def calculate_recall(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 def standard_eval_pipeline(
     all_probs,
     all_labels,
-    all_filters
+    all_filters,
+    output_dir: str = ".",
+    filename="confusion_matrix.png"
 ):
     mask = (all_filters == 1)
     filtered_probs = all_probs[mask]
@@ -199,14 +201,14 @@ def standard_eval_pipeline(
     mask = (all_filters == 1)
     default_predictions = (all_probs >= 0.5).astype(int)
     accuracy, precision, recall, f1, positive_rate = print_evaluation_results(
-        all_labels, default_predictions, all_probs
+        all_labels, default_predictions, all_probs, output_dir, filename
     )
 
     print("=" * 60)
     print(f"Using {sum(mask)}/{len(mask)} samples within mismatches.")
     
     print_evaluation_results(
-        filtered_labels, filtered_predictions, filtered_probs
+        filtered_labels, filtered_predictions, filtered_probs, output_dir, filename
     )
 
     return accuracy, precision, recall, f1, positive_rate
@@ -216,7 +218,8 @@ def optimization_pipeline(
     all_labels,
     all_filters,
     optimizing_config,
-    output_dir: str = "."
+    output_dir: str = ".",
+    filename="confusion_matrix_post_opt.png"
 ):  
     mask = (all_filters == 1)
     filtered_probs = all_probs[mask]
@@ -252,7 +255,7 @@ def optimization_pipeline(
 
     predictions = (all_probs >= best_threshold).astype(int)
     accuracy, precision, recall, f1, positive_rate = print_evaluation_results(
-        all_labels, predictions, all_probs, output_dir
+        all_labels, predictions, all_probs, output_dir, filename
     )
 
     # Use filtered data for final evaluation
@@ -260,7 +263,7 @@ def optimization_pipeline(
     print("=" * 60)
     print(f"Using {sum(mask)}/{len(mask)} samples within mismatches.")
     print_evaluation_results(
-        filtered_labels, filtered_predictions, filtered_probs, output_dir
+        filtered_labels, filtered_predictions, filtered_probs, output_dir, filename
     )
 
     # Plot positive rate vs recall curve with the optimal threshold
