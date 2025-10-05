@@ -23,6 +23,8 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 
 ## 📰 News
 
+* [2025/09] Accepted by the NeurIPS'25 conference.
+
 * [2025/06] Support Qwen3 model family and sampling.
 
 ## 🔗 Interactive Demo
