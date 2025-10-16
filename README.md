@@ -22,10 +22,11 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 ⭐ **Feel free to star this repo or cite our paper if you find it useful!**
 
 ## 📰 News
+* [2025/10] Added support for the Qwen3 model family. Router checkpoints are now available [here](https://huggingface.co/nics-efc/R2R_router_collections).
 
 * [2025/09] Accepted by the NeurIPS'25 conference.
 
-* [2025/06] Support Qwen3 model family and sampling.
+* [2025/06] Support sampling on Deepseek's R1-1.5B and R1-32B models.
 
 ## 🔗 Interactive Demo
 
