@@ -278,7 +278,7 @@ class SLMServer:
             idle_loops = 0
             while True:
                 if inbound_queue is not None: # Process message from LLM
-                    device = torch.device(f"cuda:{rank}")
+                    device = scheduler.batch_not_need.device
                     # TODO: use sglang's way to receive message and broadcast to all ranks
                     commit_msgs = SLMServer.fetch_and_align_inbound(
                         inbound_queue=inbound_queue,
@@ -298,9 +298,15 @@ class SLMServer:
                     # 追加到本地缓冲（按 _seq 单调递增，无需排序）
                     pending_reqs.extend(reqs)
 
+                device = scheduler.batch_not_need.device
+                len_local = torch.tensor([len(pending_reqs)], device=device, dtype=torch.int64)
+                gather_info = [torch.zeros_like(len_local) for _ in range(world_size)]
+                dist.all_gather(gather_info, len_local)
+                min_len = min(int(t.item()) for t in gather_info)
+
                 # ==== 序列对齐提交阶段 ====
                 # 只有在存在待提交请求时才做一次 all_gather
-                if pending_reqs:
+                if min_len > 0:
                     try:
                         local_max_seq = pending_reqs[-1]._seq
                     except AttributeError:
@@ -309,7 +315,6 @@ class SLMServer:
                         pending_reqs = []
                     else:
                         # 收集每个 rank 已看到的最大序列
-                        device = torch.device(f"cuda:{rank}")
                         t_local = torch.tensor([local_max_seq], device=device, dtype=torch.long)
                         gather_buf = [torch.zeros_like(t_local) for _ in range(world_size)]
                         dist.all_gather(gather_buf, t_local)
@@ -365,7 +370,7 @@ class SLMServer:
                                         temperature = req.sampling_params.temperature, 
                                         top_k = req.sampling_params.top_k, 
                                         top_p = req.sampling_params.top_p, 
-                                        max_new_tokens = req.sampling_params.max_new_tokens
+                                        max_new_tokens = 1
                                         )
                                     )
                                 req_to_send.append(waiting_req)
@@ -418,7 +423,7 @@ class SLMServer:
                     keep_indices.append(i)
                 elif req.status == "need":
                     keep_indices.append(i)
-                output_ids_list.append(req.output_ids[-1])
+                output_ids_list.append(req.output_ids[-1] if req.output_ids else 1)
             
             scheduler.last_batch.output_ids = torch.tensor(output_ids_list, dtype=torch.int64).to(
                 scheduler.last_batch.device, non_blocking=True
@@ -448,7 +453,6 @@ class SLMServer:
 
         # Get or init pending buffer for this queue
         pending = pending_map.get(qkey, [])
-
         # Drain non-blocking
         while True:
             try:
@@ -458,9 +462,13 @@ class SLMServer:
             except Exception:
                 break
             pending.append(item)
-
-        if not pending:
-            # Nothing to align
+        
+        len_local = torch.tensor([len(pending)], device=device, dtype=torch.int64)
+        gather_len = [torch.zeros_like(len_local) for _ in range(world_size)]
+        dist.all_gather(gather_len, len_local)
+        min_len = min(int(t.item()) for t in gather_len)
+        if min_len == 0:
+            pending_map[qkey] = pending
             return []
 
         # Determine local max seq; if absent, commit all
@@ -480,7 +488,6 @@ class SLMServer:
         commit_end = 0
         while commit_end < len(pending) and getattr(pending[commit_end], "_seq", -1) <= commit_seq:
             commit_end += 1
-
         if commit_end == 0:
             # Keep all in pending for next round
             pending_map[qkey] = pending
@@ -729,10 +736,11 @@ class SLMServer:
                         except Exception:
                             break
                         # Replicate to every rank's inbound queue to preserve identical ordering
-                        for q in self._inbound_rank_queues:
+                        for i, q in enumerate(self._inbound_rank_queues):
                             try:
                                 q.put_nowait(msg)
-                            except Exception:
+                            except Exception as e:
+                                print(f"[SLMServer rank {i}] Failed to enqueue inbound msg to rank queue. Exception:{e}")
                                 pass
         self._recv_from_llm_thread = threading.Thread(target=_recv_loop, daemon=True)
         self._recv_from_llm_thread.start()
