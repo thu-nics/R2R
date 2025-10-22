@@ -226,7 +226,7 @@ class LLMServer:
             idle_loops = 0
             while True:
                 if inbound_queue is not None: # Process message from SLM
-                    device = torch.device(f"cuda:{rank+quick_num_gpus}")
+                    device = scheduler.batch_not_need.device
                     commit_msgs = LLMServer.fetch_and_align_inbound(
                         inbound_queue=inbound_queue,
                         rank=rank,
