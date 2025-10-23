@@ -27,7 +27,6 @@ from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
 from r2r.models.batch_inference.schedule_req import WaitingReq, SimpleSamplingParams
-from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -211,7 +210,7 @@ class LLMServer:
             scheduler.spec_algorithm,
             scheduler.server_args.enable_custom_logit_processor,
         )
-        DynamicSimpleSGLangSelector.simple_prepare_for_extend(scheduler.batch_not_need)
+        LLMServer.simple_prepare_for_extend(scheduler.batch_not_need)
         scheduler.batch_not_need.multimodal_inputs = []
         scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
             scheduler.batch_not_need.device, non_blocking=True
@@ -527,3 +526,87 @@ class LLMServer:
                         outbound_queue.put(waiting_req)
                     except Exception:
                         pass
+    
+    @staticmethod
+    def simple_prepare_for_extend(batch: ScheduleBatch):
+        global end_of_cache_loc
+        batch.forward_mode = ForwardMode.EXTEND
+
+        # Allocate req slots
+        bs = len(batch.reqs)
+        req_pool_indices = [req.rid for req in batch.reqs]
+
+        # Init tensors
+        reqs = batch.reqs
+        input_ids = [r.fill_ids[len(r.prefix_indices) :] for r in reqs]
+        extend_num_tokens = sum(len(ids) for ids in input_ids)
+        seq_lens = [len(r.fill_ids) for r in reqs]
+        prefix_lens = [len(r.prefix_indices) for r in reqs]
+        extend_lens = [r.extend_input_len for r in reqs]
+        req_pool_indices_tensor = torch.tensor(req_pool_indices, dtype=torch.int64).to(
+            batch.device, non_blocking=True
+        )
+        input_ids_tensor = torch.tensor(sum(input_ids, []), dtype=torch.int64).to(
+            batch.device, non_blocking=True
+        )
+        seq_lens_tensor = torch.tensor(seq_lens, dtype=torch.int64).to(
+            batch.device, non_blocking=True
+        )
+        prefix_lens_tensor = torch.tensor(prefix_lens, dtype=torch.int64).to(
+            batch.device, non_blocking=True
+        )
+        extend_lens_tensor = seq_lens_tensor - prefix_lens_tensor
+        for i, (req, seq_len, pre_len) in enumerate(zip(reqs, seq_lens, prefix_lens)):
+            req.req_pool_idx = req_pool_indices[i]
+            assert seq_len - pre_len == req.extend_input_len
+            req.cached_tokens += pre_len - req.already_computed
+            req.already_computed = seq_len
+            req.is_retracted = False
+        # Allocate memory for multiple sequences
+        out_cache_locs = []
+        for i in range(bs):
+            start = end_of_cache_loc
+            end_of_cache_loc += extend_lens[i]
+            end = start + extend_lens[i]
+            out_cache_loc = torch.arange(
+                start=start,
+                end=end,
+                dtype=torch.int64,
+                device=batch.device,
+            )
+            out_cache_locs.append(out_cache_loc)
+        
+        if len(out_cache_locs) == 0:
+            out_cache_loc = None
+        else:
+            out_cache_loc = torch.cat(out_cache_locs) if len(out_cache_locs) > 1 else out_cache_locs[0]
+
+        # Set fields
+        batch.input_ids = input_ids_tensor
+        batch.req_pool_indices = req_pool_indices_tensor
+        batch.seq_lens = seq_lens_tensor
+        batch.out_cache_loc = out_cache_loc
+        batch.input_embeds = None
+        batch.seq_lens_sum = sum(seq_lens)
+        if batch.return_logprob:
+            batch.top_logprobs_nums = [r.top_logprobs_num for r in reqs]
+            batch.token_ids_logprobs = [r.token_ids_logprob for r in reqs]
+        batch.extend_logprob_start_lens = [r.extend_logprob_start_len for r in reqs]
+        batch.extend_num_tokens = extend_num_tokens
+        batch.prefix_lens = prefix_lens
+        batch.extend_lens = extend_lens
+        if out_cache_loc is not None:
+            write_req_to_token_pool_triton[(bs,)](
+                batch.req_to_token_pool.req_to_token,
+                req_pool_indices_tensor,
+                prefix_lens_tensor,
+                seq_lens_tensor,
+                extend_lens_tensor,
+                out_cache_loc,
+                batch.req_to_token_pool.req_to_token.shape[1],
+            )
+        # Build sampling info
+        batch.sampling_info = SamplingBatchInfo.from_schedule_batch(
+            batch,
+            batch.model_config.vocab_size,
+        )
