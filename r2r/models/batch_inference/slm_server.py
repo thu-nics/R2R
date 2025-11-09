@@ -694,6 +694,7 @@ class SLMServer:
                 payload = {
                     "rid": getattr(req, "rid", None),
                     "origin_input_text": getattr(req, "origin_input_text", None),
+                    "origin_input_ids": list(getattr(req, "origin_input_ids", [])),
                     "output_ids": list(getattr(req, "output_ids", [])),
                     "status": "finished",
                 }

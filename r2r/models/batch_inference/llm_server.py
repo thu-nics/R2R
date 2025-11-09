@@ -284,6 +284,8 @@ class LLMServer:
                     status="need",
                     last_cached_loc=[],
                 )
+                if not hasattr(new_req, 'device'):
+                    new_req.device = scheduler.batch_not_need.device
                 scheduler.waiting_queue.append(new_req)
 
         if scheduler.batch_not_need is not None:
@@ -301,6 +303,8 @@ class LLMServer:
                         status="need",
                         last_cached_loc=req.last_cached_loc,
                     )
+                    if not hasattr(new_req, 'device'):
+                        new_req.device = scheduler.batch_not_need.device
                     scheduler.waiting_queue.append(new_req)
                 else:
                     not_keep_indices.append(i)
