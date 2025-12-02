@@ -44,6 +44,7 @@ class LLMServer:
         reference_num_gpus: int,
         reference_master_port: int | None = None,
         ready_queue: Optional[mp.Queue] = None,
+        overlap_tp_schedule: bool = False,
         # New queues for inter-server communication
     ):
         self.is_reset_cache = False
@@ -51,7 +52,7 @@ class LLMServer:
         self.batch = None
         self.new_reqs=[]
         self.reference_sglang_kwargs = reference_sglang_kwargs
-        self.quick_num_gpus = quick_num_gpus
+        self.quick_num_gpus = quick_num_gpus if overlap_tp_schedule is False else 0
         self.reference_num_gpus = reference_num_gpus
         # Queue for signaling worker readiness to outside controller (e.g., SLDisaggregationSystem)
         self.ready_queue = ready_queue
@@ -139,8 +140,8 @@ class LLMServer:
             model_path=MODEL_DICT["reference"]["model_path"], 
             disable_cuda_graph=True, 
             disable_overlap_schedule=True,
-            disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["reference"]["mem_fraction_static"],
+            disable_radix_cache=True,
+            mem_fraction_static=0.8 if overlap_tp_schedule else 0.9,
             **reference_sglang_kwargs,
         )
         # Rank queues kept for future forwarded request injection (e.g., from SLM via inbound queue processing)
@@ -232,6 +233,16 @@ class LLMServer:
                         world_size=world_size,
                         device=device,
                     )
+                    is_shutdown = [msg for msg in commit_msgs if getattr(msg, "status", "") == "SHUTDOWN"]
+                    is_reset_cache = [msg for msg in commit_msgs if getattr(msg, "status", "") == "RESET_CACHE"]
+                    commit_msgs = [msg for msg in commit_msgs if getattr(msg, "status", "") not in ("SHUTDOWN", "RESET_CACHE")]
+                    if is_shutdown:
+                        print(f"[reference rank{rank}] SHUTDOWN received (queue), exiting...")
+                        break
+                    elif is_reset_cache:
+                        ok = scheduler.flush_cache()
+                        print(f"[reference rank{rank}] Cache reset (queue): {ok}")
+
                     if commit_msgs:
                         LLMServer.process_result_from_slm(scheduler, commit_msgs)
                 # For LLM, there is no need to process new reqs from rank_queue
@@ -263,6 +274,7 @@ class LLMServer:
     def process_result_from_slm(scheduler: Scheduler, commit_msgs):
         new_token_ids = {}
         returned_rid_list = []
+        finished_rid_list = torch.zeros(1000)
         if scheduler.batch_not_need is not None:
             req_already_prefilled = [req.rid for req in scheduler.batch_not_need.reqs]
         else:
@@ -270,6 +282,9 @@ class LLMServer:
         for waiting_req in commit_msgs:
             new_token_ids[waiting_req.rid] = waiting_req.new_token_ids
             returned_rid_list.append(waiting_req.rid)
+            if waiting_req.status == "finished":
+                finished_rid_list[waiting_req.rid] = 1
+                continue
             if waiting_req.rid not in req_already_prefilled:
                 origin_input_ids = waiting_req.new_token_ids
                 origin_input_text = scheduler.tokenizer.decode(origin_input_ids)
@@ -291,6 +306,9 @@ class LLMServer:
         if scheduler.batch_not_need is not None:
             not_keep_indices = []
             for i, req in enumerate(scheduler.batch_not_need.reqs):
+                if finished_rid_list[req.rid] == 1:
+                    scheduler.tree_cache.cache_finished_req(req)
+                    continue
                 if req.rid in returned_rid_list:
                     origin_input_ids = req.origin_input_ids+new_token_ids[req.rid]
                     origin_input_text = scheduler.tokenizer.decode(origin_input_ids)
