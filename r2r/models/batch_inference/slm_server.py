@@ -43,6 +43,7 @@ class SLMServer:
         ready_queue: Optional[mp.Queue]=None,
         switching_strategy: str = "neural",
         strategy_kwargs: Dict = {},
+        overlap_tp_schedule: bool = False,
     ):
         self.quick_waiting_line = []
         self.is_reset_cache = False
@@ -173,7 +174,7 @@ class SLMServer:
             disable_cuda_graph=True, 
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["quick"]["mem_fraction_static"],
+            mem_fraction_static=0.15 if overlap_tp_schedule else 0.9,
             **quick_sglang_kwargs,
         )
         # ==== New: per-rank queues and recv thread (central SUB) ====
@@ -286,10 +287,10 @@ class SLMServer:
                         device=device,
                     )
                     if commit_msgs:
-                        SLMServer.process_result_from_llm(scheduler, commit_msgs, finished_queue)
+                        SLMServer.process_result_from_llm(rank, scheduler, commit_msgs, finished_queue, outbound_queue)
 
                 # TODO: use sglang's way to receive message and broadcast to all ranks
-                reqs = SLMServer._drain_rank_queue(scheduler, rank_queue, rank)
+                reqs = SLMServer._drain_rank_queue(scheduler, rank_queue, rank, outbound_queue)
                 if isinstance(reqs, int) and reqs == -1:
                     print(f"[quick rank{rank}] SHUTDOWN received (queue), exiting...")
                     break
@@ -373,7 +374,8 @@ class SLMServer:
                                         )
                                     )
                                 req_to_send.append(waiting_req)
-                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue)
+                        
+                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank)
                         scheduler.check_batch_status(batch)
                         scheduler.last_batch=batch
                         if rank == 0:
@@ -381,11 +383,11 @@ class SLMServer:
                                 outbound_queue.put_nowait(waiting_req)
 
                     else:
-                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue)
+                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank)
                         scheduler.last_batch=batch
                 else:
                     idle_loops += 1
-                    time.sleep(0.003)
+                    #time.sleep(0.003)
         finally:
             try:
                 if dist.is_initialized():
@@ -394,7 +396,7 @@ class SLMServer:
                 print(f"[rank {rank}] destroy_process_group error: {e}")
 
     @staticmethod
-    def process_result_from_llm(scheduler: Scheduler, commit_msgs, finished_queue: Optional[mp.Queue] = None):
+    def process_result_from_llm(rank: int, scheduler: Scheduler, commit_msgs, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
         better_token_ids = {}
         returned_rid_list = []
         for waiting_req in commit_msgs:
@@ -434,8 +436,8 @@ class SLMServer:
                 if req.status == "notneed" and req.rid not in returned_rid_list:
                     not_keep_indices.append(i)
             scheduler.batch_not_need.filter_batch(keep_indices=not_keep_indices)
-            if finished_reqs:
-                SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue)
+            if finished_reqs and rank == 0:
+                SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue, outbound_queue)
     
     @staticmethod
     def simple_prepare_for_extend(batch: ScheduleBatch):
@@ -642,7 +644,7 @@ class SLMServer:
             pass
 
     @staticmethod
-    def _drain_rank_queue(scheduler: Scheduler, rank_queue: mp.Queue, rank: Optional[int]=None):
+    def _drain_rank_queue(scheduler: Scheduler, rank_queue: mp.Queue, rank: Optional[int]=None, outbound_queue: Optional[mp.Queue]=None):
         out = []
         while True:
             try:
@@ -651,10 +653,14 @@ class SLMServer:
                 break
             status = getattr(item, "status", "")
             if status == "SHUTDOWN":
+                if rank == 0:
+                    outbound_queue.put_nowait(WaitingReq(status="SHUTDOWN",))
                 return -1
             elif status == "RESET_CACHE":
                 ok = scheduler.flush_cache()
                 print(f"[quick rank{scheduler.gpu_id}] Cache reset: {ok}")
+                if rank == 0:
+                    outbound_queue.put_nowait(WaitingReq(rid=-1, new_token_ids=[], status="RESET_CACHE",))
                 continue
             item.eos_token_ids = scheduler.model_config.hf_eos_token_id
             item.vocab_size = scheduler.model_config.vocab_size
@@ -663,7 +669,7 @@ class SLMServer:
 
     # NOTE: original recv_requests removed in favor of central queue distribution.
     
-    def process_batch_results(batch: ScheduleBatch, result, scheduler: Scheduler, finished_queue: Optional[mp.Queue] = None):
+    def process_batch_results(batch: ScheduleBatch, result, scheduler: Scheduler, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, rank: int = 0):
         batch.output_ids = result.next_token_ids
         finished_reqs = []
 
@@ -678,11 +684,11 @@ class SLMServer:
                 scheduler.tree_cache.cache_finished_req(req)
                 finished_reqs.append(req)
 
-        if len(finished_reqs) > 0:
-            SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue)
+        if len(finished_reqs) > 0 and rank == 0:
+            SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue, outbound_queue)
 
 
-    def process_finished_requests(finished_reqs: List[Req], tokenizer, finished_queue: Optional[mp.Queue] = None):
+    def process_finished_requests(finished_reqs: List[Req], tokenizer, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
         """Process finished requests, e.g., logging or updating status."""
         for req in finished_reqs:
             #print(f"Request {req.rid} finished")
@@ -690,10 +696,17 @@ class SLMServer:
             #print(f"Bot: {tokenizer.decode(req.output_ids)}")
             #print("===")
             # Enqueue to system if queue is provided (send a lightweight serializable payload)
+            outbound_queue.put_nowait(WaitingReq(
+                rid=req.rid, 
+                new_token_ids=[], 
+                sampling_params=SimpleSamplingParams(),
+                status="finished",
+            ))
             if finished_queue is not None:
                 payload = {
                     "rid": getattr(req, "rid", None),
                     "origin_input_text": getattr(req, "origin_input_text", None),
+                    "origin_input_ids": list(getattr(req, "origin_input_ids", [])),
                     "output_ids": list(getattr(req, "output_ids", [])),
                     "status": "finished",
                 }

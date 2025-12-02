@@ -44,6 +44,7 @@ class SLDisaggregationSystem:
         quick_sglang_kwargs: Optional[dict] = None,
         reference_sglang_kwargs: Optional[dict] = None,
         is_logits_processor: bool = True,
+        overlap_tp_schedule: bool = False,
     ):
         self.device = device
         self.dtype = dtype
@@ -71,7 +72,7 @@ class SLDisaggregationSystem:
         # Currently only support tp_size=1 for quick model
         quick_sglang_kwargs["tp_size"] = self.quick_num_gpus
         reference_sglang_kwargs["tp_size"] = self.reference_num_gpus
-        assert self.reference_num_gpus >= 2, f"Using {self.reference_num_gpus} GPUs for SGLang, expected larger than 2."
+        assert self.reference_num_gpus >= 1, f"Using {self.reference_num_gpus} GPUs for SGLang, expected larger than 1."
         print(f"Using {self.reference_num_gpus+self.quick_num_gpus} GPUs for SGLang, with {self.quick_num_gpus} for quick.")
 
         # ZMQ PUB socket (broadcast producer) so all TP ranks receive the same message
@@ -91,6 +92,7 @@ class SLDisaggregationSystem:
             self._quick_ready_queue,
             self.switching_strategy,
             self.strategy_kwargs,
+            overlap_tp_schedule=overlap_tp_schedule,
         )
 
         try:
@@ -117,6 +119,7 @@ class SLDisaggregationSystem:
             self.reference_num_gpus,
             reference_master_port=29501,
             ready_queue=self._llm_ready_queue,
+            overlap_tp_schedule=overlap_tp_schedule,
         )
 
         try:
@@ -200,8 +203,9 @@ class SLDisaggregationSystem:
                                 # msg may be a dict payload from SLMServer
                                 if isinstance(msg, dict) and msg.get("status") == "finished":
                                     rid = msg.get("rid")
-                                    self.finished_reqs[rid] = msg
-                                    self.finished_reqs_rids.append(rid)
+                                    if rid not in self.finished_reqs_rids:
+                                        self.finished_reqs[rid] = msg
+                                        self.finished_reqs_rids.append(rid)
                                 else:
                                     # fallback: assume Req-like object
                                     rid = getattr(msg, 'rid', None)
@@ -357,80 +361,6 @@ class SLDisaggregationSystem:
             time.sleep(0.1)
 
         return results
-            
-            
-    def generate_only_llm(
-        self,
-        input_ids: List[List[int]],
-        max_new_tokens: int = 2048,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        top_k: int = 100,
-        record_generation: bool = False,
-        print_tokens: bool = False,
-    ) -> Union[
-        List[str],
-        Tuple[List[str], List[GenerationRecorder]]
-    ]:
-        """
-        Generate text using dynamic model selection with SGLang models.
-
-        Args:
-            input_ids: A list of lists of token IDs for batch processing
-            max_new_tokens: Maximum number of tokens to generate
-            temperature: Temperature for sampling
-            top_p: Top-p probability threshold for nucleus sampling
-            top_k: Top-k for sampling
-            record_generation: If True, return both generated text and generation records
-            print_tokens: Whether to print tokens during generation
-
-        Returns:
-            If record_generation is False: list of generated texts
-            If record_generation is True: tuple of (list of generated texts, list of GenerationRecorders)
-        """
-        self.total_prompts_num = 0
-        self.reset_cache_simple()
-        #batch_input_ids = input_ids
-        #batch_size = len(batch_input_ids)
-
-        # Prepare sampling parameters for SGLang
-        reference_sampling_params = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            max_new_tokens=1,
-            stop=[],
-        )
-
-        # sglang will revise the output logits in-place if we set temperature > 0.0
-        # so we set temperature to 0.0 here and sample in the decode_step
-        quick_sampling_params = SamplingParams(
-            temperature=0.0,
-            top_p=top_p,
-            top_k=top_k,
-            max_new_tokens=max_new_tokens,
-            stop=[],
-        )
-
-        num_prompts = len(input_ids)
-        rids = [i+self.rid for i in range(num_prompts)]
-        self.rid += num_prompts
-        for i, input_id in enumerate(input_ids):
-            req = Req(
-                rid=rids[i],
-                origin_input_text=self.tokenizer.decode(input_id),
-                origin_input_ids=input_id,
-                sampling_params=quick_sampling_params,
-                return_hidden_states=True,
-                status="need",
-            )
-            # 通过 ZMQ 发送 Req 对象到工作进程
-            try:
-                self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
-            except zmq.Again:
-                # 如果发送缓冲区满，稍等再试（简单退避）
-                time.sleep(0.01)
-                self.req_sender.send_pyobj(req)
 
     def reset_cache_simple(self):
         """Reset the cache for the quick model"""
@@ -488,6 +418,9 @@ class SLDisaggregationSystem:
             pass
 
     def __del__(self):
-        pass
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     
