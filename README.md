@@ -1,8 +1,17 @@
-# R2R: Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing
+<div align="center">
 
-<p align="center">
-🌐 <a href="https://fuvty.github.io/R2R_Project_Page/"><b>Project Page</b></a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://arxiv.org/abs/2505.21600"><b>arXiv</b></a>&nbsp&nbsp | &nbsp&nbsp🤗 <a href="https://huggingface.co/papers/2505.21600"><b>HuggingFace</b></a>
-</p>
+  <img src="resource/logo.png" alt="R2R Logo" width="100"/>
+
+  <h1>Roads to Rome (R2R)</h1>
+  <h3>Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing</h3>
+
+  <p>
+    <a href="https://fuvty.github.io/R2R_Project_Page/">🌐 <b>Project Page</b></a> •
+    <a href="https://arxiv.org/abs/2505.21600">📑 <b>arXiv</b></a> •
+    <a href="https://huggingface.co/papers/2505.21600">🤗 <b>HuggingFace</b></a>
+  </p>
+
+</div>
 
 Roads to Rome (R2R) intelligently combines small and large language models by routing **only critical, reasoning-divergent tokens to the large model**.
 
