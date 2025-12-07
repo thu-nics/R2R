@@ -171,7 +171,7 @@ class SLMServer:
 
         quick_server_args = ServerArgs(
             model_path=MODEL_DICT["quick"]["model_path"], 
-            disable_cuda_graph=True, 
+            disable_cuda_graph=False, 
             disable_overlap_schedule=True,
             disable_radix_cache=False,
             mem_fraction_static=0.15 if overlap_tp_schedule else 0.9,
