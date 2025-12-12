@@ -68,6 +68,7 @@ def main():
         is_record=False,
         quick_sglang_kwargs=quick_sglang_kwargs,
         reference_sglang_kwargs=reference_sglang_kwargs,
+        overlap_tp_schedule=False, # Default False
     )
 
     print(f"Ready to generate with SL Disaggreragion System.")
@@ -102,7 +103,7 @@ def main():
 
     leng = 1
     start_time = time.time()
-    result = generator.generate(batch_input_ids[:leng], max_new_tokens=2048, temperature=0, top_p=1, top_k=-1)
+    result = generator.generate(batch_input_ids[:leng], max_new_tokens=2048, temperature=0, top_p=1, top_k=-1, display_progress=True)
     end_time = time.time()
     total_tokens = 0
     for obj in result:

@@ -43,7 +43,7 @@ class SLMServer:
         ready_queue: Optional[mp.Queue]=None,
         switching_strategy: str = "neural",
         strategy_kwargs: Dict = {},
-        overlap_tp_schedule: bool = False,
+        mem_fraction_static: Optional[float] = None,
     ):
         self.quick_waiting_line = []
         self.is_reset_cache = False
@@ -174,7 +174,7 @@ class SLMServer:
             disable_cuda_graph=False, 
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=0.15 if overlap_tp_schedule else 0.9,
+            mem_fraction_static=mem_fraction_static,
             **quick_sglang_kwargs,
         )
         # ==== New: per-rank queues and recv thread (central SUB) ====
@@ -219,7 +219,18 @@ class SLMServer:
         
 
     @staticmethod
-    def quick_model_worker(rank, world_size: int, server_args: ServerArgs, rank_queue: mp.Queue, ready_queue: Optional[mp.Queue] = None, switching_strategy: str = "neural", strategy_kwargs: Dict = {}, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, finished_queue: Optional[mp.Queue] = None):
+    def quick_model_worker(
+        rank, 
+        world_size: int, 
+        server_args: ServerArgs, 
+        rank_queue: mp.Queue, 
+        ready_queue: Optional[mp.Queue] = None,
+        switching_strategy: str = "neural", 
+        strategy_kwargs: Dict = {}, 
+        inbound_queue: Optional[mp.Queue] = None, 
+        outbound_queue: Optional[mp.Queue] = None, 
+        finished_queue: Optional[mp.Queue] = None, 
+    ):
         
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
@@ -273,6 +284,7 @@ class SLMServer:
         scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
             scheduler.batch_not_need.device, non_blocking=True
         )
+        pbar_dict = {}
 
         try:
             idle_loops = 0
@@ -337,6 +349,26 @@ class SLMServer:
                 if batch:
                     idle_loops = 0
                     result = scheduler.run_batch(batch)
+                    
+                    # Refresh reasoning progress bars
+                    current_rids = set()
+                    for req in batch.reqs+scheduler.batch_not_need.reqs:
+                        if not req.display_progress:
+                            continue
+                        current_rids.add(req.rid)
+                        if req.rid not in pbar_dict:
+                            pbar_dict[req.rid] = tqdm(total=req.sampling_params.max_new_tokens, desc=f"Req {req.rid}", leave=False)
+                        
+                        pbar_dict[req.rid].n = len(req.output_ids)
+                        pbar_dict[req.rid].refresh()
+                    
+                    # Close progress bars for requests that are no longer in the batch
+                    finished_rids = [rid for rid in pbar_dict if rid not in current_rids]
+                    for rid in finished_rids:
+                        pbar_dict[rid].close()
+                        del pbar_dict[rid]
+
+                    
                     # Generate with quick model to get hidden states
                     batch, hidden_states, logits, next_token_ids = SLMServer.process_routing_input(batch, result)
                     # Create a ModelOutputs object for switching strategy

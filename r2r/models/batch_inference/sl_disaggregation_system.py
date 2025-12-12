@@ -4,7 +4,7 @@ import time
 import zmq
 import pickle
 from tqdm import tqdm
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union, List, Dict
 import multiprocessing as mp
 import torch.distributed as dist
 from transformers import AutoTokenizer
@@ -29,6 +29,67 @@ from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, 
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.managers.io_struct import AbortReq
+from sglang.srt.configs.model_config import ModelConfig
+
+def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwargs: Dict = {}, reference_sglang_kwargs: Dict = {}, quick_num_gpus: int = 1, reference_num_gpus: int = 1) -> Tuple[float, float]:
+    if not overlap_tp_schedule:
+        return 0.9, 0.9
+    
+    small_server_args = ServerArgs(
+        model_path=MODEL_DICT["quick"]["model_path"], 
+        disable_cuda_graph=True, 
+        disable_overlap_schedule=True,
+        disable_radix_cache=False,
+        mem_fraction_static=0.9,
+        **quick_sglang_kwargs,
+    )
+    large_server_args = ServerArgs(
+        model_path=MODEL_DICT["reference"]["model_path"], 
+        disable_cuda_graph=True, 
+        disable_overlap_schedule=True,
+        disable_radix_cache=False,
+        mem_fraction_static=0.9,
+        **reference_sglang_kwargs,
+    )
+
+    large_model_config = ModelConfig.from_server_args(large_server_args)
+    small_model_config = ModelConfig.from_server_args(small_server_args)
+
+    small_num_layers = small_model_config.num_hidden_layers
+    large_num_layers = large_model_config.num_hidden_layers
+
+    small_cell_size = (
+        small_model_config.get_num_kv_heads(quick_num_gpus)
+        * small_model_config.head_dim
+        * small_num_layers
+        * 2
+        * torch._utils._element_size(small_model_config.dtype)
+    )
+    large_cell_size = (
+        large_model_config.get_num_kv_heads(reference_num_gpus)
+        * large_model_config.head_dim
+        * large_num_layers
+        * 2
+        * torch._utils._element_size(large_model_config.dtype)
+    )
+
+    small_bytes = torch.tensor([], dtype=small_model_config.dtype).element_size()
+    small_model_mem = small_bytes * float(MODEL_DICT["quick"]["param"]) # in GB
+    large_bytes = torch.tensor([], dtype=large_model_config.dtype).element_size()
+    large_model_mem = large_bytes * float(MODEL_DICT["reference"]["param"]) # in GB
+    total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(quick_num_gpus+reference_num_gpus)) / (1 << 30) # in GB
+    available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus)) 
+
+    assert available_gpu_memory >= 0, f"Not enough GPU memory for both models: total {total_gpu_memory} GB, used {small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus} GB"
+
+    total_token_num = int(available_gpu_memory * 0.9 * (1<<30) / (small_cell_size + large_cell_size))
+
+    small_mem_fraction_static = (total_token_num * small_cell_size + small_model_mem / quick_num_gpus * (1<<30)) / (total_gpu_memory * (1<<30))
+    large_mem_fraction_static = (total_token_num * large_cell_size + large_model_mem / reference_num_gpus * (1<<30)) / (total_gpu_memory * (1<<30))
+
+    print(f"[SLDisaggregationSystem] overlap_tp_schedule=True, calculated mem_fraction_static: quick model {small_mem_fraction_static:.2f}, reference model {large_mem_fraction_static:.2f}, max num tokens is {total_token_num}")
+
+    return small_mem_fraction_static, large_mem_fraction_static
 
 
 class SLDisaggregationSystem:
@@ -82,6 +143,24 @@ class SLDisaggregationSystem:
 
         self._quick_ready_queue = mp.Queue()
 
+        small_mem_fraction_static, large_mem_fraction_static = get_mem_fraction_statics(
+            overlap_tp_schedule=overlap_tp_schedule,
+            quick_sglang_kwargs=quick_sglang_kwargs,
+            reference_sglang_kwargs=reference_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            reference_num_gpus=self.reference_num_gpus,
+        )
+
+        """
+        cell_size = (
+            self.model_config.get_num_kv_heads(get_attention_tp_size())
+            * self.model_config.head_dim
+            * num_layers
+            * 2
+            * torch._utils._element_size(self.kv_cache_dtype)
+        )
+        """
+
         # Launch quick model workers with req_port(port that receive Req objects)
         # Inter-server queues (Q2): create before servers so workers can use them
         # Instantiate SLMServer first (it binds its PUB for SLM->LLM)
@@ -92,7 +171,7 @@ class SLDisaggregationSystem:
             self._quick_ready_queue,
             self.switching_strategy,
             self.strategy_kwargs,
-            overlap_tp_schedule=overlap_tp_schedule,
+            mem_fraction_static=small_mem_fraction_static,
         )
 
         try:
@@ -120,6 +199,7 @@ class SLDisaggregationSystem:
             reference_master_port=29501,
             ready_queue=self._llm_ready_queue,
             overlap_tp_schedule=overlap_tp_schedule,
+            mem_fraction_static=large_mem_fraction_static,
         )
 
         try:
@@ -255,6 +335,7 @@ class SLDisaggregationSystem:
                 return_hidden_states=True,
                 status="need",
             )
+            req.display_progress = False
             # 通过 ZMQ 发送 Req 对象到工作进程
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
@@ -274,6 +355,7 @@ class SLDisaggregationSystem:
         top_k: int = 100,
         record_generation: bool = False,
         print_tokens: bool = False,
+        display_progress: bool = False,
     ) -> Union[
         List[str],
         Tuple[List[str], List[GenerationRecorder]]
@@ -330,6 +412,7 @@ class SLDisaggregationSystem:
                 return_hidden_states=True,
                 status="need",
             )
+            req.display_progress = display_progress
             # 通过 ZMQ 发送 Req 对象到工作进程
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
