@@ -45,6 +45,7 @@ class LLMServer:
         reference_master_port: int | None = None,
         ready_queue: Optional[mp.Queue] = None,
         overlap_tp_schedule: bool = False,
+        mem_fraction_static: Optional[float] = None,
         # New queues for inter-server communication
     ):
         self.is_reset_cache = False
@@ -141,7 +142,7 @@ class LLMServer:
             disable_cuda_graph=True, 
             disable_overlap_schedule=True,
             disable_radix_cache=True,
-            mem_fraction_static=0.8 if overlap_tp_schedule else 0.9,
+            mem_fraction_static=mem_fraction_static,
             **reference_sglang_kwargs,
         )
         # Rank queues kept for future forwarded request injection (e.g., from SLM via inbound queue processing)
