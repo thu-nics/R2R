@@ -44,19 +44,13 @@ Check out our interactive demo and see R2R in action by visiting our [project pa
 
 ## 🛠️ Environment Setup
 
-Create a new conda environment and install dependencies:
+Use the following script to create a new Conda environment and install all dependencies:
 
 ```bash
-conda create -n r2r python=3.10
-conda activate r2r
-pip install -e .
+bash setup_env.sh
 ```
 
-Install `flashinfer==0.2.3` based on your CUDA version. For example, for CUDA 12.4, you can install it with:
-
-```bash
-pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6/
-```
+`setup_env.sh` installs `flashinfer==0.2.3`. Make sure you install a FlashInfer build that matches your CUDA version. If your system uses a different CUDA version, install the corresponding FlashInfer package for your setup.
 
 > If you accidentally install the wrong flashinfer, please uninstall it before re-installation.
 > ```bash
@@ -64,6 +58,7 @@ pip install flashinfer-python==0.2.3 -i https://flashinfer.ai/whl/cu124/torch2.6
 >rm -rf ~/.cache/flashinfer/
 >rm -rf ~/.triton/cache
 >```
+
 ## 🚀 Usage
 
 ### 1. 💬 Run Mix inference with R2R
