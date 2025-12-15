@@ -27,6 +27,7 @@ from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
 from r2r.models.batch_inference.schedule_req import WaitingReq, SimpleSamplingParams
+from r2r.models.batch_inference.llm_scheduler import LLMScheduler
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -139,7 +140,7 @@ class LLMServer:
 
         reference_server_args = ServerArgs(
             model_path=MODEL_DICT["reference"]["model_path"], 
-            disable_cuda_graph=True, 
+            disable_cuda_graph=False, 
             disable_overlap_schedule=True,
             disable_radix_cache=True,
             mem_fraction_static=mem_fraction_static,
@@ -184,7 +185,7 @@ class LLMServer:
         torch.cuda.set_device(rank + quick_num_gpus)
 
         port_args = PortArgs.init_new(server_args)
-        scheduler = Scheduler(
+        scheduler = LLMScheduler(
             server_args=server_args,
             port_args=port_args,
             gpu_id=rank+quick_num_gpus,
@@ -264,6 +265,8 @@ class LLMServer:
         except BaseException as e:
             # Any unexpected error -> exit loop to avoid orphaned NCCL workers
             print(f"[rank {rank}] reference worker fatal error: {e}. Exiting loop.")
+            import traceback
+            traceback.print_exc()
         finally:
             try:
                 if dist.is_initialized():
