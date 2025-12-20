@@ -325,6 +325,7 @@ class LLMServer:
                         status="need",
                         last_cached_loc=req.last_cached_loc,
                     )
+                    new_req.req_pool_idx = req.req_pool_idx
                     if not hasattr(new_req, 'device'):
                         new_req.device = scheduler.batch_not_need.device
                     scheduler.waiting_queue.append(new_req)

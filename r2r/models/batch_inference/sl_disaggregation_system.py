@@ -9,6 +9,10 @@ import multiprocessing as mp
 import torch.distributed as dist
 from transformers import AutoTokenizer
 import threading
+import asyncio
+import os
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29500"
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.models.batch_inference.slm_server import SLMServer
@@ -77,7 +81,7 @@ def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwa
     small_model_mem = small_bytes * float(MODEL_DICT["quick"]["param"]) # in GB
     large_bytes = torch.tensor([], dtype=large_model_config.dtype).element_size()
     large_model_mem = large_bytes * float(MODEL_DICT["reference"]["param"]) # in GB
-    total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(quick_num_gpus+reference_num_gpus)) / (1 << 30) # in GB
+    total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(max(quick_num_gpus,reference_num_gpus))) / (1 << 30) # in GB
     available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus)) 
 
     assert available_gpu_memory >= 0, f"Not enough GPU memory for both models: total {total_gpu_memory} GB, used {small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus} GB"
@@ -113,6 +117,7 @@ class SLDisaggregationSystem:
         self.switching_strategy = switching_strategy
         self.is_record = is_record
         self.rid = 1
+        self.rid_lock = threading.Lock()
         self.tokenizer = None
         self.reference_tokenizer = None
 
@@ -345,6 +350,12 @@ class SLDisaggregationSystem:
                 self.req_sender.send_pyobj(req)
         
         time.sleep(5)
+    
+    def get_rid(self):
+        with self.rid_lock:
+            rid = self.rid
+            self.rid += 1
+        return rid
 
     def generate(
         self,
@@ -376,7 +387,6 @@ class SLDisaggregationSystem:
             If record_generation is False: list of generated texts
             If record_generation is True: tuple of (list of generated texts, list of GenerationRecorders)
         """
-        self.total_prompts_num = 0
         self.reset_cache_simple()
         #batch_input_ids = input_ids
         #batch_size = len(batch_input_ids)
@@ -401,8 +411,9 @@ class SLDisaggregationSystem:
         )
 
         num_prompts = len(input_ids)
-        rids = [i+self.rid for i in range(num_prompts)]
-        self.rid += num_prompts
+        rids = []
+        for i in range(num_prompts):
+            rids.append(self.get_rid())
         for i, input_id in enumerate(input_ids):
             req = Req(
                 rid=rids[i],
@@ -442,6 +453,94 @@ class SLDisaggregationSystem:
                         results.append(obj)
                 break
             time.sleep(0.1)
+
+        return results
+    
+    async def generate_one_request(
+        self,
+        input_id: List[int],
+        max_new_tokens: int = 2048,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        top_k: int = 100,
+        display_progress: bool = False,
+    ) -> Union[Dict, object]:
+        """
+        Async version of generate for a single request.
+        Does not reset cache.
+        """
+        # Prepare sampling parameters for SGLang (Quick Model)
+        # sglang will revise the output logits in-place if we set temperature > 0.0
+        # so we set temperature to 0.0 here and sample in the decode_step
+        quick_sampling_params = SamplingParams(
+            temperature=0.0,
+            top_p=top_p,
+            top_k=top_k,
+            max_new_tokens=max_new_tokens,
+            stop=[],
+        )
+
+        rid = self.get_rid()
+        
+        req = Req(
+            rid=rid,
+            origin_input_text=self.tokenizer.decode(input_id),
+            origin_input_ids=input_id,
+            sampling_params=quick_sampling_params,
+            return_hidden_states=True,
+            status="need",
+        )
+        req.display_progress = display_progress
+
+        # Send Req object via ZMQ
+        # Note: ZMQ send is generally fast enough to be treated as sync, 
+        # but we handle EAGAIN with async sleep just in case.
+        try:
+            self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            await asyncio.sleep(0.01)
+            self.req_sender.send_pyobj(req)
+
+        # Wait asynchronously until the rid appears in finished map
+        while True:
+            if rid in self.finished_reqs:
+                return self.finished_reqs[rid]
+            await asyncio.sleep(0.01) # Non-blocking wait
+
+    async def generate_batch_requests(
+        self,
+        input_ids: List[List[int]],
+        max_new_tokens: int = 2048,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        top_k: int = 100,
+        display_progress: bool = False,
+    ):
+        tasks = []
+        
+        # 1. 创建所有任务
+        for i, input_id in enumerate(input_ids):
+            # 创建 task，立即开始执行
+            task = asyncio.create_task(
+                self.generate_one_request(
+                    input_id=input_id,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    display_progress=display_progress
+                )
+            )
+            tasks.append(task)
+
+        results = []
+
+        for i, future in enumerate(asyncio.as_completed(tasks)):
+            try:
+                result = await future
+                results.append(result)
+            except Exception as e:
+                pass
 
         return results
 

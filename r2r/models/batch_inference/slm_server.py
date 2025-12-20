@@ -740,6 +740,7 @@ class SLMServer:
                     "origin_input_text": getattr(req, "origin_input_text", None),
                     "origin_input_ids": list(getattr(req, "origin_input_ids", [])),
                     "output_ids": list(getattr(req, "output_ids", [])),
+                    "output_text": tokenizer.decode(getattr(req, "output_ids", [])),
                     "status": "finished",
                 }
                 try:
