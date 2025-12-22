@@ -1,3 +1,6 @@
+import os
+os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
+
 import argparse
 import logging
 import uvicorn
@@ -30,17 +33,18 @@ class GenerateReqInput(BaseModel):
 async def lifespan(app: FastAPI):
     global system
     print("Initializing SLDisaggregationSystem inside lifespan...")
-    
+
     if server_args:
         quick_sglang_kwargs = {
             "dtype": "bfloat16",
-            "tp_size": server_args.tp_size_quick
+            "tp_size": server_args.tp_size_quick,
+            "enable_return_hidden_states": True
         }
         reference_sglang_kwargs = {
             "dtype": "bfloat16",
             "tp_size": server_args.tp_size_ref
         }
-        
+
         strategy_kwargs = {}
         if server_args.router_model_path:
             strategy_kwargs['model_path'] = server_args.router_model_path
@@ -61,13 +65,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Failed to initialize system: {e}")
             raise e
-    
+
     yield 
-    
-    
+
     print("Shutting down system...")
     if system:
-        # system.shutdown() 
+        # system.shutdown()
         pass
 
 app = FastAPI(lifespan=lifespan)
@@ -121,8 +124,8 @@ async def health():
 def run_server(args):
     global server_args
     server_args = args 
-    
-    
+
+
     uvicorn.run(app, host=args.host, port=args.port)
 
 if __name__ == "__main__":

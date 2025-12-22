@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
 logger = logging.getLogger(__name__)
 
+import r2r.models.batch_inference.flashinfer_cuda_graph
+
 PREFIX_LEN = 8
 
 class LLMCudaGraphRunner(CudaGraphRunner):
@@ -85,13 +87,13 @@ class LLMCudaGraphRunner(CudaGraphRunner):
 
         # Batch sizes to capture
         # self.capture_bs, self.compile_bs = get_batch_sizes_to_capture(model_runner)
-        self.capture_bs, self.compile_bs = [1], []
+        self.capture_bs, self.compile_bs = [1, 2], []
         log_info_on_rank0(logger, f"Capture cuda graph bs {self.capture_bs}")
         self.capture_forward_mode = ForwardMode.EXTEND
         self.capture_hidden_mode = CaptureHiddenMode.NULL
-        self.extend_num_tokens_per_bs = list(range(32, 0, -1))
+        self.extend_num_tokens_per_bs = list(range(16, 0, -1))
         self.max_extend_num_tokens_per_bs = max(self.extend_num_tokens_per_bs)
-        if model_runner.spec_algorithm.is_eagle() or model_runner.spec_algorithm.is_standalone():
+        if model_runner.spec_algorithm.is_eagle():
             if self.model_runner.is_draft_worker:
                 raise RuntimeError("This should not happen")
             else:
@@ -104,7 +106,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
 
         # Attention backend
         self.max_bs = max(self.capture_bs)
-        self.max_num_token = self.max_bs * self.max_extend_num_tokens_per_bs
+        self.max_num_token = self.max_extend_num_tokens_per_bs
         self.model_runner.attn_backend.init_cuda_graph_state(self.max_bs, self.max_num_token)
         self.seq_len_fill_value = self.model_runner.attn_backend.get_cuda_graph_seq_len_fill_value()
 
@@ -193,9 +195,10 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             cuda_graph_bs = forward_batch.batch_size
             cuda_seq_len = forward_batch.extend_seq_lens
 
-        is_bs_supported = cuda_graph_bs in self.graphs if self.disable_padding else cuda_graph_bs <= self.max_bs
-        is_seq_len_supported = all(seq_len.item() in self.extend_num_tokens_per_bs for seq_len in cuda_seq_len)
-        is_bs_supported = is_bs_supported and is_seq_len_supported
+        is_bs_supported = cuda_graph_bs in self.graphs # if self.disable_padding else cuda_graph_bs <= self.max_bs
+        if is_bs_supported:
+            is_seq_len_supported = cuda_seq_len.sum() in self.extend_num_tokens_per_bs # all(seq_len in self.extend_num_tokens_per_bs for seq_len in cuda_seq_len)
+            is_bs_supported = is_bs_supported and is_seq_len_supported
 
         if self.require_mlp_sync:
             is_bs_supported = is_bs_supported and forward_batch.can_run_dp_cuda_graph
@@ -215,21 +218,22 @@ class LLMCudaGraphRunner(CudaGraphRunner):
         return is_bs_supported and is_encoder_lens_supported and is_tbo_supported and capture_hidden_mode_matches
 
     def capture_one_batch_size(self, bs: int, extend_seq_len: int, forward: Callable):
+        assert extend_seq_len >= bs
         graph = self._create_device_graph()
         stream = self.stream
-        num_tokens = bs * extend_seq_len
+        num_tokens = extend_seq_len
 
         # Graph inputs
         input_ids = self.input_ids[:num_tokens]
         req_pool_indices = self.req_pool_indices[:bs]
-        self.seq_lens[:bs].fill_(PREFIX_LEN+extend_seq_len)
+        self.seq_lens[:bs].fill_(PREFIX_LEN + 1)
+        self.seq_lens[bs-1] = PREFIX_LEN + extend_seq_len - (bs - 1)
         seq_lens = self.seq_lens[:bs]
         out_cache_loc = self.out_cache_loc[:num_tokens]
-        positions = torch.arange(PREFIX_LEN,PREFIX_LEN+extend_seq_len, dtype=torch.int64).repeat(bs)
-        self.positions[:num_tokens].copy_(positions)
         positions = self.positions[:num_tokens]
 
-        self.extend_seq_lens[:bs].fill_(extend_seq_len)
+        self.extend_seq_lens[:bs].fill_(1)
+        self.extend_seq_lens[bs-1] = extend_seq_len-(bs-1)
         extend_seq_lens = self.extend_seq_lens[:bs]
         extend_prefix_lens = self.extend_prefix_lens[:bs]
         extend_start_loc = self.extend_start_loc[:bs]
@@ -397,6 +401,8 @@ class LLMCudaGraphRunner(CudaGraphRunner):
                     if bs not in self.graphs:
                         self.graphs[bs] = {}
                     for j, seq_len in enumerate(self.extend_num_tokens_per_bs):
+                        if seq_len < bs:
+                            continue
                         if get_tensor_model_parallel_rank() == 0:
                             avail_mem = get_available_gpu_memory(
                                 self.model_runner.device,
@@ -438,8 +444,8 @@ class LLMCudaGraphRunner(CudaGraphRunner):
         self.recapture_if_needed(forward_batch)
 
         raw_bs = forward_batch.batch_size
-        raw_seq_len = forward_batch.extend_seq_lens[0].item()
-        raw_num_token = raw_bs * raw_seq_len
+        raw_seq_len = forward_batch.extend_seq_lens
+        raw_num_token = raw_seq_len.sum().item()
 
         # Pad
         if self.require_mlp_tp_gather:
@@ -460,7 +466,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
         self.out_cache_loc[:raw_num_token].copy_(forward_batch.out_cache_loc)
         self.positions[:raw_num_token].copy_(forward_batch.positions)
         self.extend_prefix_lens[:raw_bs].copy_(forward_batch.extend_prefix_lens)
-        self.extend_seq_lens[:raw_bs].fill_(raw_seq_len)
+        self.extend_seq_lens[:raw_bs].copy_(raw_seq_len)
 
         seq_lens_cpu = None
 
@@ -508,7 +514,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             forward_batch.spec_info,
             seq_lens_cpu=seq_lens_cpu,
             prefix_lens=self.extend_prefix_lens[:bs],
-            extend_seq_len=raw_seq_len,
+            extend_seq_len=raw_num_token,
         )
 
         # Store fields
@@ -531,7 +537,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             self.positions[: self.raw_num_token].copy_(forward_batch.positions)
 
         # Replay
-        self.graphs[self.bs][self.seq_len].replay()
+        self.graphs[self.bs][self.raw_num_token].replay()
 
         output = self.output_buffers[self.bs]
         if isinstance(output, LogitsProcessorOutput):

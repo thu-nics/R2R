@@ -52,10 +52,6 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.moe import initialize_moe_config
 from sglang.srt.managers.io_struct import (
     AbortReq,
-    BatchTokenizedEmbeddingReqInput,
-    BatchTokenizedGenerateReqInput,
-    ClearHiCacheReqInput,
-    ClearHiCacheReqOutput,
     CloseSessionReqInput,
     ExpertDistributionReq,
     ExpertDistributionReqOutput,
@@ -69,8 +65,6 @@ from sglang.srt.managers.io_struct import (
     InitWeightsUpdateGroupReqInput,
     LoadLoRAAdapterReqInput,
     LoadLoRAAdapterReqOutput,
-    MultiTokenizerRegisterReq,
-    MultiTokenizerWrapper,
     OpenSessionReqInput,
     OpenSessionReqOutput,
     ProfileReq,
@@ -104,7 +98,10 @@ from sglang.srt.managers.schedule_policy import (
     SchedulePolicy,
 )
 from sglang.srt.managers.scheduler_input_blocker import SchedulerInputBlocker
-
+from sglang.srt.managers.scheduler_metrics_mixin import (
+    RECORD_STEP_TIME,
+    SchedulerMetricsMixin,
+)
 from sglang.srt.managers.scheduler_output_processor_mixin import (
     SchedulerOutputProcessorMixin,
 )
@@ -123,7 +120,7 @@ from sglang.srt.mem_cache.lora_radix_cache import LoRARadixCache
 from sglang.srt.mem_cache.radix_cache import RadixCache
 from sglang.srt.mem_cache.swa_radix_cache import SWARadixCache
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
-from sglang.srt.parser.reasoning_parser import ReasoningParser
+from sglang.srt.reasoning_parser import ReasoningParser
 from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.torch_memory_saver_adapter import TorchMemorySaverAdapter
@@ -140,7 +137,6 @@ from sglang.srt.utils import (
     get_zmq_socket,
     is_cpu,
     kill_itself_when_parent_died,
-    numa_bind_to_node,
     point_to_point_pyobj,
     pyspy_dump_schedulers,
     require_mlp_sync,
@@ -193,20 +189,26 @@ class LLMScheduler(Scheduler):
         self.enable_overlap = not server_args.disable_overlap_schedule
         self.skip_tokenizer_init = server_args.skip_tokenizer_init
         self.enable_metrics = server_args.enable_metrics
-        self.enable_metrics_for_all_schedulers = server_args.enable_metrics_for_all_schedulers
+        self.enable_metrics_for_all_schedulers = (
+            server_args.enable_metrics_for_all_schedulers
+        )
         self.enable_kv_cache_events = server_args.kv_events_config is not None
         self.stream_interval = server_args.stream_interval
-        self.spec_algorithm = SpeculativeAlgorithm.from_string(server_args.speculative_algorithm)
+        self.spec_algorithm = SpeculativeAlgorithm.from_string(
+            server_args.speculative_algorithm
+        )
         self.gpu_id = gpu_id
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
         self.page_size = server_args.page_size
 
-        self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = compute_dp_attention_world_info(
-            server_args.enable_dp_attention,
-            self.tp_rank,
-            self.tp_size,
-            self.dp_size,
+        self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
+            compute_dp_attention_world_info(
+                server_args.enable_dp_attention,
+                self.tp_rank,
+                self.tp_size,
+                self.dp_size,
+            )
         )
 
         # Init model config
@@ -215,17 +217,28 @@ class LLMScheduler(Scheduler):
         # Init inter-process communication
         context = zmq.Context(2)
         self.idle_sleeper = None
-        if self.pp_rank == 0 and self.attn_tp_rank == 0:
-            self.recv_from_tokenizer = get_zmq_socket(context, zmq.PULL, port_args.scheduler_input_ipc_name, False)
-            self.recv_from_rpc = get_zmq_socket(context, zmq.DEALER, port_args.rpc_ipc_name, False)
 
-            self.send_to_tokenizer = get_zmq_socket(context, zmq.PUSH, port_args.tokenizer_ipc_name, False)
+        if self.pp_rank == 0 and self.attn_tp_rank == 0:
+            self.recv_from_tokenizer = get_zmq_socket(
+                context, zmq.PULL, port_args.scheduler_input_ipc_name, False
+            )
+            self.recv_from_rpc = get_zmq_socket(
+                context, zmq.DEALER, port_args.rpc_ipc_name, False
+            )
+
+            self.send_to_tokenizer = get_zmq_socket(
+                context, zmq.PUSH, port_args.tokenizer_ipc_name, False
+            )
             if server_args.skip_tokenizer_init:
                 # Directly send to the TokenizerManager
-                self.send_to_detokenizer = get_zmq_socket(context, zmq.PUSH, port_args.tokenizer_ipc_name, False)
+                self.send_to_detokenizer = get_zmq_socket(
+                    context, zmq.PUSH, port_args.tokenizer_ipc_name, False
+                )
             else:
                 # Send to the DetokenizerManager
-                self.send_to_detokenizer = get_zmq_socket(context, zmq.PUSH, port_args.detokenizer_ipc_name, False)
+                self.send_to_detokenizer = get_zmq_socket(
+                    context, zmq.PUSH, port_args.detokenizer_ipc_name, False
+                )
 
             if self.server_args.sleep_on_idle:
                 self.idle_sleeper = IdleSleeper(
@@ -241,7 +254,9 @@ class LLMScheduler(Scheduler):
             self.send_to_detokenizer = SimpleNamespace(send_pyobj=lambda x: None)
 
         if self.current_scheduler_metrics_enabled():
-            self.send_metrics_from_scheduler = get_zmq_socket(context, zmq.PUSH, port_args.metrics_ipc_name, False)
+            self.send_metrics_from_scheduler = get_zmq_socket(
+                context, zmq.PUSH, port_args.metrics_ipc_name, False
+            )
 
         # Init tokenizer
         self.init_tokenizer()
@@ -251,8 +266,12 @@ class LLMScheduler(Scheduler):
 
         # Set reasoning_parser and think_end_id if --reasoning_parser is enabled
         if self.server_args.reasoning_parser and self.tokenizer:
-            reasoning_parser = ReasoningParser(model_type=self.server_args.reasoning_parser, stream_reasoning=False)
-            self.tokenizer.think_end_id = self.tokenizer.encode(reasoning_parser.detector.think_end_token, add_special_tokens=False)[0]
+            reasoning_parser = ReasoningParser(
+                model_type=self.server_args.reasoning_parser, stream_reasoning=False
+            )
+            self.tokenizer.think_end_id = self.tokenizer.encode(
+                reasoning_parser.detector.think_end_token, add_special_tokens=False
+            )[0]
 
         # Check whether overlap can be enabled
         if not self.is_generation:
@@ -288,18 +307,6 @@ class LLMScheduler(Scheduler):
                 target_worker=self.tp_worker,
                 dp_rank=dp_rank,
             )
-        elif self.spec_algorithm.is_standalone():
-            from sglang.srt.speculative.standalone_worker import StandaloneWorker
-
-            self.draft_worker = StandaloneWorker(
-                gpu_id=gpu_id,
-                tp_rank=tp_rank,
-                moe_ep_rank=moe_ep_rank,
-                server_args=server_args,
-                nccl_port=port_args.nccl_port,
-                target_worker=self.tp_worker,
-                dp_rank=dp_rank,
-            )
         else:
             self.draft_worker = None
 
@@ -319,7 +326,9 @@ class LLMScheduler(Scheduler):
             _,
         ) = self.tp_worker.get_worker_info()
         if global_server_args_dict["max_micro_batch_size"] is None:
-            global_server_args_dict["max_micro_batch_size"] = max(self.max_running_requests // server_args.pp_size, 1)
+            global_server_args_dict["max_micro_batch_size"] = max(
+                self.max_running_requests // server_args.pp_size, 1
+            )
 
         self.tp_group = self.tp_worker.get_tp_group()
         self.tp_cpu_group = self.tp_group.cpu_group
@@ -336,18 +345,22 @@ class LLMScheduler(Scheduler):
         self.is_hybrid = self.tp_worker.is_hybrid
         if self.is_hybrid:
             self.sliding_window_size = self.tp_worker.sliding_window_size
-            self.full_tokens_per_layer, self.swa_tokens_per_layer = self.tp_worker.get_tokens_per_layer_info()
+            self.full_tokens_per_layer, self.swa_tokens_per_layer = (
+                self.tp_worker.get_tokens_per_layer_info()
+            )
 
         # Print debug info
         if tp_rank == 0:
-            avail_mem = get_available_gpu_memory(self.device, self.gpu_id, empty_cache=False)
+            avail_mem = get_available_gpu_memory(
+                self.device, self.gpu_id, empty_cache=False
+            )
             logger.info(
                 f"max_total_num_tokens={self.max_total_num_tokens}, "
                 f"chunked_prefill_size={server_args.chunked_prefill_size}, "
                 f"max_prefill_tokens={self.max_prefill_tokens}, "
                 f"max_running_requests={self.max_running_requests}, "
                 f"context_len={self.model_config.context_len}, "
-                f"{'available_cpu_mem' if self.device == 'cpu' else 'available_gpu_mem'}={avail_mem:.2f} GB"
+                f"available_gpu_mem={avail_mem:.2f} GB"
             )
 
         # Init memory pool and cache
@@ -385,7 +398,9 @@ class LLMScheduler(Scheduler):
         if self.chunked_prefill_size <= 0:  # -1 means disable
             self.chunked_prefill_size = None
         self.chunked_req = None
-        self.is_mixed_chunk = self.chunked_prefill_size is not None and server_args.enable_mixed_chunk
+        self.is_mixed_chunk = (
+            self.chunked_prefill_size is not None and server_args.enable_mixed_chunk
+        )
 
         # Init the grammar backend for constrained generation
         self.grammar_queue: List[Req] = []
@@ -405,16 +420,22 @@ class LLMScheduler(Scheduler):
             self.tree_cache,
             self.enable_hierarchical_cache,
         )
-        assert server_args.schedule_conservativeness >= 0, "Invalid schedule_conservativeness"
+        assert (
+            server_args.schedule_conservativeness >= 0
+        ), "Invalid schedule_conservativeness"
         self.init_new_token_ratio = min(
-            global_config.default_init_new_token_ratio * server_args.schedule_conservativeness,
+            global_config.default_init_new_token_ratio
+            * server_args.schedule_conservativeness,
             1.0,
         )
         self.min_new_token_ratio = min(
-            self.init_new_token_ratio * global_config.default_min_new_token_ratio_factor,
+            self.init_new_token_ratio
+            * global_config.default_min_new_token_ratio_factor,
             1.0,
         )
-        self.new_token_ratio_decay = (self.init_new_token_ratio - self.min_new_token_ratio) / global_config.default_new_token_ratio_decay_steps
+        self.new_token_ratio_decay = (
+            self.init_new_token_ratio - self.min_new_token_ratio
+        ) / global_config.default_new_token_ratio_decay_steps
         self.new_token_ratio = self.init_new_token_ratio
 
         # Init watchdog thread
@@ -424,20 +445,27 @@ class LLMScheduler(Scheduler):
         self.parent_process = psutil.Process().parent()
 
         # Init memory saver, profiler and metric stats
-        self.memory_saver_adapter = TorchMemorySaverAdapter.create(enable=server_args.enable_memory_saver)
+        self.memory_saver_adapter = TorchMemorySaverAdapter.create(
+            enable=server_args.enable_memory_saver
+        )
         self.offload_tags = set()
-        self.init_profiler()
+        self.init_profier()
 
         self.recv_skipper = SchedulerRecvSkipper.maybe_create(server_args)
-        self.input_blocker = SchedulerInputBlocker(noop=self.attn_tp_rank != 0) if get_bool_env_var("SGLANG_ENABLE_COLOCATED_BATCH_GEN") else None
+        self.input_blocker = (
+            SchedulerInputBlocker(noop=self.attn_tp_rank != 0)
+            if get_bool_env_var("SGLANG_ENABLE_COLOCATED_BATCH_GEN")
+            else None
+        )
 
         # Init metrics stats
         self.init_metrics(tp_rank, pp_rank, dp_rank)
         self.init_kv_events(server_args.kv_events_config)
-        self.init_dp_balance(dp_balance_meta)
 
         # Init disaggregation
-        self.disaggregation_mode = DisaggregationMode(self.server_args.disaggregation_mode)
+        self.disaggregation_mode = DisaggregationMode(
+            self.server_args.disaggregation_mode
+        )
         self.init_disaggregation()
 
         if get_bool_env_var("SGLANG_GC_LOG"):
@@ -448,10 +476,7 @@ class LLMScheduler(Scheduler):
             [
                 (TokenizedGenerateReqInput, self.handle_generate_request),
                 (TokenizedEmbeddingReqInput, self.handle_embedding_request),
-                (BatchTokenizedGenerateReqInput, self.handle_batch_generate_request),
-                (BatchTokenizedEmbeddingReqInput, self.handle_batch_embedding_request),
                 (FlushCacheReqInput, self.flush_cache_wrapped),
-                (ClearHiCacheReqInput, self.clear_hicache_storage_wrapped),
                 (AbortReq, self.abort_request),
                 (OpenSessionReqInput, self.open_session),
                 (CloseSessionReqInput, self.close_session),
@@ -474,6 +499,14 @@ class LLMScheduler(Scheduler):
                 (ExpertDistributionReq, self.expert_distribution_handle),
                 (LoadLoRAAdapterReqInput, self.load_lora_adapter),
                 (UnloadLoRAAdapterReqInput, self.unload_lora_adapter),
-                (MultiTokenizerRegisterReq, self.register_multi_tokenizer),
             ]
         )
+
+        self.balance_meta = dp_balance_meta
+        if (
+            server_args.enable_dp_attention
+            and server_args.load_balance_method == "minimum_tokens"
+        ):
+            assert dp_balance_meta is not None
+
+        self.recv_dp_balance_id_this_term = []

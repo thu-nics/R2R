@@ -64,8 +64,11 @@ class LLMTpModelWorker(TpModelWorker):
         # Init model and tokenizer
         self.model_config = ModelConfig.from_server_args(
             server_args,
-            model_path=(server_args.model_path if not is_draft_worker else server_args.speculative_draft_model_path),
-            model_revision=(server_args.revision if not is_draft_worker else server_args.speculative_draft_model_revision),
+            model_path=(
+                server_args.model_path
+                if not is_draft_worker
+                else server_args.speculative_draft_model_path
+            ),
             is_draft_model=is_draft_worker,
         )
 
@@ -114,18 +117,27 @@ class LLMTpModelWorker(TpModelWorker):
         self.max_total_num_tokens = self.model_runner.max_total_num_tokens
         self.max_prefill_tokens = server_args.max_prefill_tokens
         self.max_running_requests = min(
-            (self.max_total_num_tokens // 2 if server_args.max_running_requests is None else server_args.max_running_requests // (server_args.dp_size if server_args.enable_dp_attention else 1)),
+            (
+                self.max_total_num_tokens // 2
+                if server_args.max_running_requests is None
+                else server_args.max_running_requests
+                // (server_args.dp_size if server_args.enable_dp_attention else 1)
+            ),
             self.model_runner.req_to_token_pool.size,
         )
         assert self.max_running_requests > 0, "max_running_request is zero"
         self.max_queued_requests = server_args.max_queued_requests
-        assert self.max_queued_requests > 0, "max_queued_requests is zero. We need to be at least 1 to schedule a request."
+        assert (
+            self.max_running_requests > 0
+        ), "max_queued_requests is zero. We need to be at least 1 to schedule a request."
         self.max_req_len = min(
             self.model_config.context_len - 1,
             self.max_total_num_tokens - 1,
         )
         self.max_req_input_len = self.max_req_len - 5
-        assert self.max_req_len > 0 and self.max_req_input_len > 0, "Memory pool size is too small"
+        assert (
+            self.max_req_len > 0 and self.max_req_input_len > 0
+        ), "Memory pool size is too small"
 
         # Sync random seed across TP workers
         self.random_seed = broadcast_pyobj(
