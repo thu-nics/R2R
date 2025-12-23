@@ -1,0 +1,22 @@
+from r2r.models.batch_inference.scheduler import __init__ as _init_scheduler, get_next_batch_to_run, get_new_batch_prefill, check_batch_status
+from r2r.models.batch_inference.schedule_batch import __init__ as _init_req, prepare_for_extend, filter_batch
+from r2r.models.batch_inference.flashinfer_cuda_graph import __init__ as _init_flashinfer_cuda_graph, init_forward_metadata_capture_cuda_graph, init_forward_metadata_replay_cuda_graph, forward_extend
+
+from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
+from sglang.srt.layers.attention.flashinfer_backend import FlashInferAttnBackend
+
+FlashInferAttnBackend.__init__ = _init_flashinfer_cuda_graph
+FlashInferAttnBackend.init_forward_metadata_capture_cuda_graph = init_forward_metadata_capture_cuda_graph
+FlashInferAttnBackend.init_forward_metadata_replay_cuda_graph = init_forward_metadata_replay_cuda_graph
+FlashInferAttnBackend.forward_extend = forward_extend
+
+Scheduler.__init__ = _init_scheduler
+Scheduler.get_next_batch_to_run = get_next_batch_to_run
+Scheduler.get_new_batch_prefill = get_new_batch_prefill
+Scheduler.check_batch_status = check_batch_status
+
+ScheduleBatch.prepare_for_extend = prepare_for_extend
+ScheduleBatch.filter_batch = filter_batch
+
+Req.__init__ = _init_req

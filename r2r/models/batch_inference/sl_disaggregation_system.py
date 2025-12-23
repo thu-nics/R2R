@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 import threading
 import asyncio
 import os
+import r2r.models.batch_inference.patch 
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29500"
 

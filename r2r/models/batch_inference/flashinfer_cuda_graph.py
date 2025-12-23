@@ -56,7 +56,7 @@ class ExtendMetadata:
     extend_no_prefix: bool
 
 
-def FlashInferAttnBackend__init__(
+def __init__(
     self: FlashInferAttnBackend,
     model_runner: ModelRunner,
     skip_prefill: bool = False,
@@ -629,11 +629,3 @@ class FlashInferIndicesUpdaterExtend:
             custom_mask=custom_mask,
             non_blocking=True,
         )
-
-
-FlashInferAttnBackend.__init__ = FlashInferAttnBackend__init__
-FlashInferAttnBackend.init_forward_metadata_capture_cuda_graph = init_forward_metadata_capture_cuda_graph
-FlashInferAttnBackend.init_forward_metadata_replay_cuda_graph = init_forward_metadata_replay_cuda_graph
-FlashInferAttnBackend.forward_extend = forward_extend
-
-print("Patched FlashInferAttnBackend for extend with CUDA Graphs.")
