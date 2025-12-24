@@ -11,7 +11,6 @@ from transformers import AutoTokenizer
 import threading
 import asyncio
 import os
-import r2r.models.batch_inference.patch 
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29500"
 
@@ -35,6 +34,9 @@ from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.configs.model_config import ModelConfig
+
+import r2r.models.batch_inference.patch
+
 
 def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwargs: Dict = {}, reference_sglang_kwargs: Dict = {}, quick_num_gpus: int = 1, reference_num_gpus: int = 1) -> Tuple[float, float]:
     if not overlap_tp_schedule:
@@ -605,5 +607,3 @@ class SLDisaggregationSystem:
             self.shutdown()
         except Exception:
             pass
-
-    

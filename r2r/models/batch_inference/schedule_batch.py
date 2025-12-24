@@ -357,6 +357,25 @@ def init_next_round_input(
         self.prefix_indices = torch.tensor(self.last_cached_loc, device=self.device)
     self.extend_input_len = len(self.fill_ids) - len(self.prefix_indices)
 
+
+def reset_for_retract(self):
+    self.prefix_indices = []
+    self.last_node = None
+    self.swa_uuid_for_lock = None
+    self.extend_input_len = 0
+    self.is_retracted = True
+    self.input_token_logprobs = None
+    self.temp_input_top_logprobs_val = None
+    self.temp_input_top_logprobs_idx = None
+    self.extend_logprob_start_len = 0
+    self.is_chunked = 0
+    self.req_pool_idx = None
+    self.already_computed = 0
+    if self.last_cached_loc is not None:
+        self.last_cached_loc = []
+    self.last_llm_loc = None
+
+
 def prepare_for_extend(self):
     self.forward_mode = ForwardMode.EXTEND
 
