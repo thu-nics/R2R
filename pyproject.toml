@@ -9,7 +9,7 @@ description = "Mix inference with small language models and large language model
 readme = "README.md"
 classifiers = [ "Programming Language :: Python :: 3", "License :: OSI Approved :: Apache Software License",]
 requires-python = ">=3.8"
-dependencies = ["torch==2.6.0", "scikit-learn", "accelerate", "protobuf", "transformers==4.51.1", "pydantic==2.12.4", "pydantic_core==2.41.5", "pandas==2.2.3", "pillow==11.2.1", "pyzmq==27.1.0", "fastapi==0.115.12", "compressed_tensors", "dill", "torchao==0.11.0", "pyyaml", "gradio", "psutil", "nvidia-ml-py", "einops", "xgrammar","packaging","annotated_types","psutil","pyyaml","setproctitle"]
+dependencies = ["torch==2.8.0", "scikit-learn", "accelerate", "protobuf", "transformers==4.55.2", "pydantic==2.12.4", "pydantic_core==2.41.5", "pandas==2.2.3", "pillow==11.2.1", "pyzmq==27.1.0", "fastapi==0.115.12", "compressed_tensors", "dill", "torchao==0.9.0", "pyyaml", "gradio", "psutil", "nvidia-ml-py", "einops", "xgrammar","packaging","annotated_types","psutil","pyyaml","setproctitle"]
 
 [project.optional-dependencies]
 train = [ "jieba==0.42.1", "nltk==3.9.1", "wandb",]
