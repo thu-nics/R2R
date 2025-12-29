@@ -9,11 +9,13 @@ url = "http://0.0.0.0:30005/generate"
 data = {
     # "text": text,
     "input_ids": input_ids,
-    "temperature": 0,
-    "top_p": 1,
-    "top_k": -1,
+    "sampling_params": {
+        "temperature": 0,
+        "top_p": 1,
+        "top_k": -1,
+        "max_new_tokens": 2048,
+    },
     "display_progress": False,
-    "max_new_tokens": 128,
 }
 # Hint: You need to add chat template by yourself if using chat model here
 try:

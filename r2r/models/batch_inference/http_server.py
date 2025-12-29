@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import multiprocessing as mp
 
+from sglang.srt.managers.io_struct import GenerateReqInput as SGLangGenerateReqInput
+
 from r2r.models.batch_inference.sl_disaggregation_system import SLDisaggregationSystem
 from r2r.utils.config import MODEL_DICT
 
@@ -20,13 +22,13 @@ system: Optional[SLDisaggregationSystem] = None
 server_args = None 
 
 # Define request model
-class GenerateReqInput(BaseModel):
-    text: Optional[str] = None
-    input_ids: Optional[List[int]] = None
-    max_new_tokens: int = 2048
-    temperature: float = 0.0
-    top_p: float = 1.0
-    top_k: int = 100
+class GenerateReqInput(SGLangGenerateReqInput):
+    # text: Optional[str] = None
+    # input_ids: Optional[List[int]] = None
+    # max_new_tokens: int = 2048
+    # temperature: float = 0.0
+    # top_p: float = 1.0
+    # top_k: int = 100
     display_progress: bool = False
 
 @asynccontextmanager
@@ -92,10 +94,10 @@ async def generate_request(obj: GenerateReqInput):
         
         result = await system.generate_one_request(
             input_id=input_ids,
-            max_new_tokens=obj.max_new_tokens,
-            temperature=obj.temperature,
-            top_p=obj.top_p,
-            top_k=obj.top_k,
+            max_new_tokens=obj.sampling_params.get('max_new_tokens', 128),
+            temperature=obj.sampling_params.get('temperature', 1.0),
+            top_p=obj.sampling_params.get('top_p', 1.0),
+            top_k=obj.sampling_params.get('top_k', -1),
             display_progress=obj.display_progress
         )
         
