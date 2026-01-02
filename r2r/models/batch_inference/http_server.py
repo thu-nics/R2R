@@ -4,10 +4,12 @@ os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
 import argparse
 import logging
 import uvicorn
-from typing import List, Optional, Dict, Any
+import time
+import uuid
+from typing import List, Optional, Dict, Any, Union
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import multiprocessing as mp
 
 from sglang.srt.managers.io_struct import GenerateReqInput as SGLangGenerateReqInput
@@ -30,6 +32,44 @@ class GenerateReqInput(SGLangGenerateReqInput):
     # top_p: float = 1.0
     # top_k: int = 100
     display_progress: bool = False
+
+
+# OpenAI Chat Completion API Models
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = "default"
+    messages: List[ChatMessage]
+    temperature: Optional[float] = 1.0
+    top_p: Optional[float] = 1.0
+    max_tokens: Optional[int] = 2048
+    stream: Optional[bool] = False
+    stop: Optional[Union[str, List[str]]] = None
+    n: Optional[int] = 1
+
+
+class ChatCompletionChoice(BaseModel):
+    index: int
+    message: ChatMessage
+    finish_reason: str
+
+
+class UsageInfo(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class ChatCompletionResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: List[ChatCompletionChoice]
+    usage: UsageInfo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -115,6 +155,77 @@ async def generate_request(obj: GenerateReqInput):
     except Exception as e:
         logger.error(f"Generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """OpenAI-compatible chat completions endpoint."""
+    
+    global system
+    if system is None:
+        raise HTTPException(status_code=503, detail="System not initialized")
+    
+    if request.stream:
+        raise HTTPException(status_code=400, detail="Streaming is not supported yet")
+    
+    try:
+        # Convert messages to text using chat template
+        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        
+        # Apply chat template if available
+        if hasattr(system.tokenizer, 'apply_chat_template'):
+            input_ids = system.tokenizer.apply_chat_template(
+                messages, 
+                add_generation_prompt=True,
+                tokenize=True
+            )
+        else:
+            # Fallback: concatenate messages
+            text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            input_ids = system.tokenizer.encode(text)
+        
+        prompt_tokens = len(input_ids)
+        
+        # Generate response
+        result = await system.generate_one_request(
+            input_id=input_ids,
+            max_new_tokens=request.max_tokens or 2048,
+            temperature=request.temperature or 1.0,
+            top_p=request.top_p or 1.0,
+            top_k=-1,
+            display_progress=False
+        )
+        
+        # Extract output
+        output_ids = result.output_ids if hasattr(result, 'output_ids') else result.get('output_ids', [])
+        output_text = system.tokenizer.decode(output_ids, skip_special_tokens=True)
+        completion_tokens = len(output_ids)
+        
+        # Build OpenAI-compatible response
+        response = ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            created=int(time.time()),
+            model=request.model or "default",
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content=output_text),
+                    finish_reason="stop"
+                )
+            ],
+            usage=UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens
+            )
+        )
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"Chat completion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health():
