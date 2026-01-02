@@ -20,6 +20,7 @@ from r2r.utils.sampling import sample_token
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.server_args import PortArgs, ServerArgs
 
 
@@ -76,6 +77,8 @@ class DynamicSimpleSGLangSelector:
             gpu_id=1,
             tp_rank=0,
             dp_rank=0,
+            moe_ep_rank=0,
+            pp_rank=0,
         )
         # Load tokenizer
         self.tokenizer = self.quick_scheduler.tokenizer
@@ -144,7 +147,8 @@ class DynamicSimpleSGLangSelector:
                 stop=[]
             ),
             eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
-            return_hidden_states=True
+            return_hidden_states=True,
+            vocab_size=self.quick_scheduler.model_config.vocab_size
         )
         req.sampling_params.normalize(None)
         self.quick_scheduler.waiting_queue.append(req)
@@ -156,7 +160,7 @@ class DynamicSimpleSGLangSelector:
             next_token_ids = result.next_token_ids
             self.quick_scheduler.last_batch = batch
         for req in batch.reqs:
-            self.quick_scheduler.abort_request(req)
+            self.quick_scheduler.abort_request(AbortReq(req.rid))
             req.check_finished()
             if req.finished():
                 self.quick_scheduler.tree_cache.cache_finished_req(req)
@@ -180,6 +184,8 @@ class DynamicSimpleSGLangSelector:
             gpu_id=rank,
             tp_rank=rank,
             dp_rank=0,
+            moe_ep_rank=0,
+            pp_rank=0,
         )
 
         while True:
@@ -206,7 +212,9 @@ class DynamicSimpleSGLangSelector:
                 )
                 DynamicSimpleSGLangSelector.simple_prepare_for_extend(new_batch)
                 batch = new_batch.get_model_worker_batch()
-                _, next_token_ids = scheduler.tp_worker.forward_batch_generation(batch)
+                result = scheduler.tp_worker.forward_batch_generation(batch)
+                # sglang 0.5.1 returns (logits_output, next_token_ids, ...) - extract next_token_ids
+                next_token_ids = result[1] if isinstance(result, tuple) else result
                 next_token_ids_list = next_token_ids.tolist()
 
                 if rank == 0:
@@ -312,7 +320,8 @@ class DynamicSimpleSGLangSelector:
                 origin_input_ids=input_id,
                 sampling_params=sampling_params,
                 eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id, # noqa
-                return_hidden_states=False
+                return_hidden_states=False,
+                vocab_size=self.quick_scheduler.model_config.vocab_size
             )
             req.sampling_params.normalize(None) # disable str-based stop token
             req.prefix_indices = self.reference_prefix_indices_list[input_indices[i]]
@@ -371,7 +380,7 @@ class DynamicSimpleSGLangSelector:
 
         for req, next_token_id in zip(batch.reqs, next_token_ids):
             if next_token_id in self.quick_scheduler.model_config.hf_eos_token_id:
-                scheduler.abort_request(req)
+                scheduler.abort_request(AbortReq(req.rid))
             req.output_ids.append(next_token_id.item())
             req.check_finished()
             if req.finished():
@@ -449,7 +458,8 @@ class DynamicSimpleSGLangSelector:
                 origin_input_ids=input_id,
                 sampling_params=quick_sampling_params,
                 eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
-                return_hidden_states=True
+                return_hidden_states=True,
+                vocab_size=self.quick_scheduler.model_config.vocab_size
             )
             self.quick_scheduler.waiting_queue.append(req)
 
