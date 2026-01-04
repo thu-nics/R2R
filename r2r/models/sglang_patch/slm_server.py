@@ -22,7 +22,6 @@ from sglang.srt.utils import broadcast_pyobj
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -38,10 +37,11 @@ class SLMServer:
     """SLM Server launched by SGLang"""
     def __init__(
         self,
-        quick_sglang_kwargs, 
-        quick_num_gpus: int, 
+        model_config: Dict,
+        quick_sglang_kwargs: Dict,
+        quick_num_gpus: int,
         req_port: int,
-        ready_queue: Optional[mp.Queue]=None,
+        ready_queue: Optional[mp.Queue] = None,
         switching_strategy: str = "neural",
         strategy_kwargs: Dict = {},
         mem_fraction_static: Optional[float] = None,
@@ -50,7 +50,8 @@ class SLMServer:
         self.is_reset_cache = False
         self.shutdown_loop = False
         self.batch = None
-        self.new_reqs=[]
+        self.new_reqs = []
+        self.model_config = model_config
         self.quick_sglang_kwargs = quick_sglang_kwargs
         self.quick_num_gpus = quick_num_gpus
         self.req_port = req_port
@@ -153,7 +154,7 @@ class SLMServer:
         self._recv_from_llm_thread = None
         self._recv_from_llm_stop = threading.Event()
 
-        print(f"Loading quick model {MODEL_DICT['quick']['model_name']}...")
+        print(f"Loading quick model {self.model_config['quick']['model_name']}...")
         # readiness queue
         self.ready_queue = ready_queue
 
@@ -171,8 +172,8 @@ class SLMServer:
             pass
 
         quick_server_args = ServerArgs(
-            model_path=MODEL_DICT["quick"]["model_path"], 
-            disable_cuda_graph=False, 
+            model_path=self.model_config["quick"]["model_path"],
+            disable_cuda_graph=False,
             disable_overlap_schedule=True,
             disable_radix_cache=False,
             mem_fraction_static=mem_fraction_static,

@@ -1,18 +1,54 @@
 import os
+os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
 
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "29502"
 import sys
 import time
 import argparse
+import json
 import torch
 import multiprocessing as mp
-import sglang as sgl  # Added for SGLang engine
 from transformers import AutoTokenizer
 import warnings
 
-from r2r.models.batch_inference.sl_disaggregation_system import SLDisaggregationSystem
-from r2r.utils.config import QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM, MODEL_DICT
+from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
+from r2r.utils.config import QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM
+
+
+def load_config_from_folder(folder_path: str) -> dict:
+    """Load model_configs.json and router path from a folder.
+
+    Args:
+        folder_path: Path to folder containing model_configs.json and router.pt
+
+    Returns:
+        dict with keys:
+            - model_config: dict from model_configs.json
+            - router_path: path to router weights file
+    """
+    model_configs_path = os.path.join(folder_path, "model_configs.json")
+    with open(model_configs_path, "r") as f:
+        model_config = json.load(f)
+
+    # Look for router weights file (try common names)
+    router_candidates = ["router.pt", "default_router.pt", "classifier.pt"]
+    router_path = None
+    for candidate in router_candidates:
+        candidate_path = os.path.join(folder_path, candidate)
+        if os.path.isfile(candidate_path):
+            router_path = candidate_path
+            break
+
+    if router_path is None:
+        # Try to find any .pt file
+        for f in os.listdir(folder_path):
+            if f.endswith(".pt"):
+                router_path = os.path.join(folder_path, f)
+                break
+
+    return {
+        "model_config": model_config,
+        "router_path": router_path
+    }
 
 
 class PerformanceTimer:
@@ -53,14 +89,19 @@ torch.set_warn_always(False)
 
 
 def main():
-    qck_model_path = MODEL_DICT["quick"]["model_path"]
+    # Load config from folder
+    config_folder = "resource/Qwen3-0.6B+Qwen3-8B"
+    config = load_config_from_folder(config_folder)
+    model_config = config["model_config"]
+    router_path = config["router_path"]
 
     quick_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1, "enable_return_hidden_states": True}
     reference_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1}
-    strategy_kwargs = {"model_path": "R2R_router/my_router.pt"}
+    strategy_kwargs = {"model_path": router_path}
     strategy_kwargs["threshold"] = 0.416
 
     generator = SLDisaggregationSystem(
+        model_config=model_config,
         device="cuda",
         dtype=torch.bfloat16,
         switching_strategy="neural",
@@ -68,29 +109,34 @@ def main():
         is_record=False,
         quick_sglang_kwargs=quick_sglang_kwargs,
         reference_sglang_kwargs=reference_sglang_kwargs,
-        overlap_tp_schedule=False, # Default False
+        overlap_tp_schedule=False,  # Default False
     )
 
     print(f"Ready to generate with SL Disaggreragion System.")
     batch_input_ids = []
     try:
-        input_file = os.path.join(os.path.dirname(__file__), "input_text.txt")  # 即 test/slserver/input_text.txt
+        input_file = os.path.join(os.path.dirname(__file__), "input_text.txt")
         if not os.path.isfile(input_file):
-            raise FileNotFoundError(f"未找到输入文件: {input_file}")
-        with open(input_file, "r", encoding="utf-8") as f:
-            raw_lines = [ln.strip() for ln in f.readlines() if ln.strip()]
-        # if len(raw_lines) != 8:
-        #    print(f"警告: 期望 8 行，实际 {len(raw_lines)} 行。仍继续处理。")
+            print(f"Input file not found: {input_file}. Using built-in prompts.")
+            raw_lines = [
+                "Write a short story about a lighthouse keeper.",
+                "Explain the concept of attention in transformers.",
+                "Summarize the benefits of test-driven development.",
+                "Describe a futuristic city in three sentences.",
+                "List three tips for debugging Python code.",
+            ]
+        else:
+            with open(input_file, "r", encoding="utf-8") as f:
+                raw_lines = [ln.strip() for ln in f.readlines() if ln.strip()]
         for line in raw_lines:
             messages = [{"role": "user", "content": line}]
             prompt_text = generator.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             print()
             token_ids = generator.tokenizer.encode(prompt_text)
             batch_input_ids.append(token_ids)
-        # 可选：打印汇总信息
-        print(f"已准备批量输入，共 {len(batch_input_ids)} 条，示例首条 token 数: {len(batch_input_ids[0]) if batch_input_ids else 0}")
+        print(f"Prepared batch input: {len(batch_input_ids)} items, first token count: {len(batch_input_ids[0]) if batch_input_ids else 0}")
     except Exception as e:
-        print(f"批量输入准备失败: {e}")
+        print(f"Batch input preparation failed: {e}")
         batch_input_ids = []
 
     # TODO: test the speed

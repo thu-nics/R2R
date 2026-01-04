@@ -44,22 +44,58 @@ Check out our interactive demo and see R2R in action by visiting our [project pa
 
 ## 🛠️ Environment Setup
 
-Use the following script to create a new Conda environment and install all dependencies:
+Create new conda environment
 
 ```bash
-bash setup_env.sh
+conda create -n r2r python=3.10
+conda activate r2r
 ```
 
-`setup_env.sh` installs `flashinfer==0.2.3`. Make sure you install a FlashInfer build that matches your CUDA version. If your system uses a different CUDA version, install the corresponding FlashInfer package for your setup.
+Install all required packages with uv
 
-> If you accidentally install the wrong flashinfer, please uninstall it before re-installation.
+```bash
+pip install uv
+uv pip install -e .
+```
+
+> Optionally, we you can install using pip with if prefered:
 > ```bash
->pip uninstall flashinfer-python
->rm -rf ~/.cache/flashinfer/
->rm -rf ~/.triton/cache
->```
+> pip install -e .
+> pip install sgl-kernel==0.3.8
+> ```
 
-## 🚀 Usage
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+1. If you accidentally install the wrong flashinfer and encounter related issue, please uninstall it before re-installation.
+
+```bash
+pip uninstall flashinfer-python
+rm -rf ~/.cache/flashinfer/
+rm -rf ~/.triton/cache
+```
+
+</details>
+
+## 🚀 Quick Start
+
+R2R is fully compatible with SGLang chat completion API. Simply:
+
+1. Download existing R2R router checkpoints. Like Qwen3-0.6B with Qwen3-8B:
+
+```bash
+hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0.6B+Qwen3-8B/**" --local-dir resource
+```
+
+2. Launch the server.
+
+```bash
+python script/inference/launch_r2r_server.py --config-folder resource/Qwen3-0.6B+Qwen3-8B
+```
+
+3. Send requests with Open-AI compatible API
+
+## 📚 Usage
 
 ### 1. 💬 Run Mix inference with R2R
 

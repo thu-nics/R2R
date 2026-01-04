@@ -18,7 +18,6 @@ from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.models.sglang_patch.slm_server import SLMServer
 from r2r.models.sglang_patch.llm_server import LLMServer
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -38,21 +37,28 @@ from sglang.srt.configs.model_config import ModelConfig
 import r2r.models.sglang_patch.patch
 
 
-def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwargs: Dict = {}, reference_sglang_kwargs: Dict = {}, quick_num_gpus: int = 1, reference_num_gpus: int = 1) -> Tuple[float, float]:
+def get_mem_fraction_statics(
+    model_config: Dict,
+    overlap_tp_schedule: bool = False,
+    quick_sglang_kwargs: Dict = {},
+    reference_sglang_kwargs: Dict = {},
+    quick_num_gpus: int = 1,
+    reference_num_gpus: int = 1
+) -> Tuple[float, float]:
     if not overlap_tp_schedule:
         return 0.9, 0.9
-    
+
     small_server_args = ServerArgs(
-        model_path=MODEL_DICT["quick"]["model_path"], 
-        disable_cuda_graph=True, 
+        model_path=model_config["quick"]["model_path"],
+        disable_cuda_graph=True,
         disable_overlap_schedule=True,
         disable_radix_cache=False,
         mem_fraction_static=0.9,
         **quick_sglang_kwargs,
     )
     large_server_args = ServerArgs(
-        model_path=MODEL_DICT["reference"]["model_path"], 
-        disable_cuda_graph=True, 
+        model_path=model_config["reference"]["model_path"],
+        disable_cuda_graph=True,
         disable_overlap_schedule=True,
         disable_radix_cache=False,
         mem_fraction_static=0.9,
@@ -81,11 +87,11 @@ def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwa
     )
 
     small_bytes = torch.tensor([], dtype=small_model_config.dtype).element_size()
-    small_model_mem = small_bytes * float(MODEL_DICT["quick"]["param"]) # in GB
+    small_model_mem = small_bytes * float(model_config["quick"]["param"]) # in GB
     large_bytes = torch.tensor([], dtype=large_model_config.dtype).element_size()
-    large_model_mem = large_bytes * float(MODEL_DICT["reference"]["param"]) # in GB
+    large_model_mem = large_bytes * float(model_config["reference"]["param"]) # in GB
     total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(max(quick_num_gpus,reference_num_gpus))) / (1 << 30) # in GB
-    available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus)) 
+    available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus))
 
     assert available_gpu_memory >= 0, f"Not enough GPU memory for both models: total {total_gpu_memory} GB, used {small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus} GB"
 
@@ -104,6 +110,7 @@ class SLDisaggregationSystem:
 
     def __init__(
         self,
+        model_config: Dict,
         device: Optional[str] = "cuda",
         dtype: torch.dtype = torch.bfloat16,
         switching_strategy: str = "neural",
@@ -114,8 +121,32 @@ class SLDisaggregationSystem:
         is_logits_processor: bool = True,
         overlap_tp_schedule: bool = False,
     ):
+        """Initialize the SL Disaggregation System for dynamic model selection.
+
+        Args:
+            model_config: Model configuration dict with structure:
+                {
+                    "quick": {"model_path": str, "param": str},
+                    "reference": {"model_path": str, "param": str}
+                }
+            device: Device to run models on (default: "cuda")
+            dtype: Data type for model weights (default: torch.bfloat16)
+            switching_strategy: Strategy for routing between models.
+                Options: "neural", "always_quick", "always_reference", etc.
+            strategy_kwargs: Additional kwargs for the switching strategy.
+                For "neural": {"model_path": str, "threshold": float}
+            is_record: Whether to record generation details (default: False)
+            quick_sglang_kwargs: SGLang kwargs for quick model, e.g.:
+                {"dtype": "bfloat16", "tp_size": 1, "enable_return_hidden_states": True}
+            reference_sglang_kwargs: SGLang kwargs for reference model, e.g.:
+                {"dtype": "bfloat16", "tp_size": 1}
+            is_logits_processor: Whether to use logits processor (default: True)
+            overlap_tp_schedule: Whether to overlap TP scheduling for memory
+                optimization when both models share GPUs (default: False)
+        """
         self.device = device
         self.dtype = dtype
+        self.model_config = model_config
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy = switching_strategy
         self.is_record = is_record
@@ -152,6 +183,7 @@ class SLDisaggregationSystem:
         self._quick_ready_queue = mp.Queue()
 
         small_mem_fraction_static, large_mem_fraction_static = get_mem_fraction_statics(
+            model_config=self.model_config,
             overlap_tp_schedule=overlap_tp_schedule,
             quick_sglang_kwargs=quick_sglang_kwargs,
             reference_sglang_kwargs=reference_sglang_kwargs,
@@ -173,12 +205,13 @@ class SLDisaggregationSystem:
         # Inter-server queues (Q2): create before servers so workers can use them
         # Instantiate SLMServer first (it binds its PUB for SLM->LLM)
         self.slm_server = SLMServer(
-            quick_sglang_kwargs,
-            self.quick_num_gpus,
-            self.req_port,
-            self._quick_ready_queue,
-            self.switching_strategy,
-            self.strategy_kwargs,
+            model_config=self.model_config,
+            quick_sglang_kwargs=quick_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            req_port=self.req_port,
+            ready_queue=self._quick_ready_queue,
+            switching_strategy=self.switching_strategy,
+            strategy_kwargs=self.strategy_kwargs,
             mem_fraction_static=small_mem_fraction_static,
         )
 
@@ -198,12 +231,13 @@ class SLDisaggregationSystem:
             raise RuntimeError("Waiting for SLMServer launching or Failed to get tokenizer from scheduler") from e
 
 
-        # Launch quick model workers
+        # Launch reference model workers
         self._llm_ready_queue = mp.Queue()
         self.llm_server = LLMServer(
-            reference_sglang_kwargs,
-            self.quick_num_gpus,
-            self.reference_num_gpus,
+            model_config=self.model_config,
+            reference_sglang_kwargs=reference_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            reference_num_gpus=self.reference_num_gpus,
             reference_master_port=29501,
             ready_queue=self._llm_ready_queue,
             overlap_tp_schedule=overlap_tp_schedule,

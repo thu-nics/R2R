@@ -2,6 +2,7 @@ import os
 os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
 
 import argparse
+import json
 import logging
 import uvicorn
 import time
@@ -15,7 +16,43 @@ import multiprocessing as mp
 from sglang.srt.managers.io_struct import GenerateReqInput as SGLangGenerateReqInput
 
 from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
-from r2r.utils.config import MODEL_DICT
+
+
+def load_config_from_folder(folder_path: str) -> dict:
+    """Load model_configs.json and router path from a folder.
+
+    Args:
+        folder_path: Path to folder containing model_configs.json and router.pt
+
+    Returns:
+        dict with keys:
+            - model_config: dict from model_configs.json
+            - router_path: path to router weights file
+    """
+    model_configs_path = os.path.join(folder_path, "model_configs.json")
+    with open(model_configs_path, "r") as f:
+        model_config = json.load(f)
+
+    # Look for router weights file (try common names)
+    router_candidates = ["router.pt", "default_router.pt"]
+    router_path = None
+    for candidate in router_candidates:
+        candidate_path = os.path.join(folder_path, candidate)
+        if os.path.isfile(candidate_path):
+            router_path = candidate_path
+            break
+
+    if router_path is None:
+        # Try to find any .pt file
+        for f in os.listdir(folder_path):
+            if f.endswith(".pt"):
+                router_path = os.path.join(folder_path, f)
+                break
+
+    return {
+        "model_config": model_config,
+        "router_path": router_path
+    }
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,6 +114,11 @@ async def lifespan(app: FastAPI):
     print("Initializing SLDisaggregationSystem inside lifespan...")
 
     if server_args:
+        # Load config from folder
+        config = load_config_from_folder(server_args.config_folder)
+        model_config = config["model_config"]
+        router_path = config["router_path"]
+
         quick_sglang_kwargs = {
             "dtype": "bfloat16",
             "tp_size": server_args.tp_size_quick,
@@ -87,28 +129,27 @@ async def lifespan(app: FastAPI):
             "tp_size": server_args.tp_size_ref
         }
 
-        strategy_kwargs = {}
-        if server_args.router_model_path:
-            strategy_kwargs['model_path'] = server_args.router_model_path
+        strategy_kwargs = {"model_path": router_path}
         if server_args.router_threshold:
             strategy_kwargs['threshold'] = server_args.router_threshold
 
         try:
             system = SLDisaggregationSystem(
+                model_config=model_config,
                 device="cuda",
                 dtype="bfloat16",
                 switching_strategy="neural",
                 strategy_kwargs=strategy_kwargs,
                 quick_sglang_kwargs=quick_sglang_kwargs,
                 reference_sglang_kwargs=reference_sglang_kwargs,
-                overlap_tp_schedule=False
+                overlap_tp_schedule=server_args.overlap_tp_schedule
             )
             print("System initialized successfully.")
         except Exception as e:
             print(f"Failed to initialize system: {e}")
             raise e
 
-    yield 
+    yield
 
     print("Shutting down system...")
     if system:

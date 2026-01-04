@@ -17,7 +17,6 @@ from transformers import AutoTokenizer
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -40,19 +39,20 @@ class LLMServer:
     """LLM Server launched by SGLang"""
     def __init__(
         self,
-        reference_sglang_kwargs, 
+        model_config: dict,
+        reference_sglang_kwargs: dict,
         quick_num_gpus: int,
         reference_num_gpus: int,
         reference_master_port: int | None = None,
         ready_queue: Optional[mp.Queue] = None,
         overlap_tp_schedule: bool = False,
         mem_fraction_static: Optional[float] = None,
-        # New queues for inter-server communication
     ):
         self.is_reset_cache = False
         self.shutdown_loop = False
         self.batch = None
-        self.new_reqs=[]
+        self.new_reqs = []
+        self.model_config = model_config
         self.reference_sglang_kwargs = reference_sglang_kwargs
         self.quick_num_gpus = quick_num_gpus if overlap_tp_schedule is False else 0
         self.reference_num_gpus = reference_num_gpus
@@ -136,11 +136,11 @@ class LLMServer:
             # Some environments may disallow setting signals (e.g., Jupyter)
             pass
 
-        print(f"Loading reference model {MODEL_DICT['reference']['model_name']}...")
+        print(f"Loading reference model {self.model_config['reference']['model_name']}...")
 
         reference_server_args = ServerArgs(
-            model_path=MODEL_DICT["reference"]["model_path"], 
-            disable_cuda_graph=False, 
+            model_path=self.model_config["reference"]["model_path"],
+            disable_cuda_graph=False,
             disable_overlap_schedule=True,
             disable_radix_cache=True,
             mem_fraction_static=mem_fraction_static,
