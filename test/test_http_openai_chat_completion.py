@@ -51,14 +51,16 @@ try:
             generated_text = ""
             finish_reason = ""
         
+        # Uncomment to see the full response
+        print(f"\nGenerated text:\n{generated_text}")
+
         print(f"Chat completion completed in {end_time - start_time:.2f} seconds")
         print(f"Prompt tokens: {prompt_tokens}, Completion tokens: {completion_tokens}, Total tokens: {total_tokens}")
         print(f"Speed: {completion_tokens/(end_time - start_time):.2f} tokens/s")
         print(f"Finish reason: {finish_reason}")
         print(f"Model: {result.get('model', 'unknown')}")
         print(f"Response ID: {result.get('id', 'unknown')}")
-        # Uncomment to see the full response
-        # print(f"\nGenerated text:\n{generated_text}")
+        
         
     except ValueError as e:
         print(f"Failed to parse JSON response: {e}")

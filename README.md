@@ -58,16 +58,17 @@ pip install uv
 uv pip install -e .
 ```
 
-> Optionally, we you can install using pip with if prefered:
-> ```bash
-> pip install -e .
-> pip install sgl-kernel==0.3.8
-> ```
-
 <details>
-<summary><b>Troubleshooting</b></summary>
+<summary>Trouble Shooting</summary>
 
-1. If you accidentally install the wrong flashinfer and encounter related issue, please uninstall it before re-installation.
+1. If you do not wish to use `uv`, You can also install using `pip`:
+
+```bash
+pip install -e .
+pip install sgl-kernel==0.3.8
+```
+
+2. If you accidentally install the wrong flashinfer and encounter related issue, please uninstall it before re-installation.
 
 ```bash
 pip uninstall flashinfer-python

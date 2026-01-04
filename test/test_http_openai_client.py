@@ -57,6 +57,9 @@ try:
     prompt_tokens = response.usage.prompt_tokens
     completion_tokens = response.usage.completion_tokens
     total_tokens = response.usage.total_tokens
+
+    # Uncomment to see the full response
+    print(f"\nGenerated text:\n{generated_text}")
     
     print(f"Chat completion completed in {end_time - start_time:.2f} seconds")
     print(f"Response ID: {response.id}")
@@ -67,8 +70,6 @@ try:
     print(f"Speed: {completion_tokens/(end_time - start_time):.2f} tokens/s")
     print(f"Finish reason: {finish_reason}")
     print("-" * 50)
-    # Uncomment to see the full response
-    # print(f"\nGenerated text:\n{generated_text}")
     
     print("\n✓ OpenAI client test passed successfully!")
 
