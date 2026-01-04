@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 from sglang.srt.managers.tp_worker import TpModelWorker
-from r2r.models.batch_inference.llm_model_runner import LLMModelRunner
+from r2r.models.sglang_patch.llm_model_runner import LLMModelRunner
 
 class LLMTpModelWorker(TpModelWorker):
 

@@ -31,7 +31,7 @@ from r2r.utils.switching import create_switching_strategy
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
-from r2r.models.batch_inference.schedule_req import WaitingReq, SimpleSamplingParams
+from r2r.models.sglang_patch.schedule_req import WaitingReq, SimpleSamplingParams
 
 
 class SLMServer:

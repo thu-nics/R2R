@@ -14,7 +14,7 @@ import multiprocessing as mp
 
 from sglang.srt.managers.io_struct import GenerateReqInput as SGLangGenerateReqInput
 
-from r2r.models.batch_inference.sl_disaggregation_system import SLDisaggregationSystem
+from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
 from r2r.utils.config import MODEL_DICT
 
 logging.basicConfig(level=logging.INFO)
@@ -226,32 +226,9 @@ async def chat_completions(request: ChatCompletionRequest):
         logger.error(f"Chat completion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/health")
 async def health():
     global system
     if system is None:
         raise HTTPException(status_code=503, detail="System initializing")
     return {"status": "healthy"}
-
-def run_server(args):
-    global server_args
-    server_args = args 
-
-
-    uvicorn.run(app, host=args.host, port=args.port)
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to")
-    parser.add_argument("--port", type=int, default=30000, help="Port to bind the server to")
-    parser.add_argument("--tp-size-quick", type=int, default=1)
-    parser.add_argument("--tp-size-ref", type=int, default=1)
-    parser.add_argument("--overlap-tp-schedule", type=bool, default=False)
-    parser.add_argument("--router-model-path", type=str, default="resource/default_router.pt")
-    parser.add_argument("--router-threshold", type=float, default=None)
-
-    mp.set_start_method("spawn", force=True)
-
-    args = parser.parse_args()
-    run_server(args)

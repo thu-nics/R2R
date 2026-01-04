@@ -157,7 +157,7 @@ _is_cpu = is_cpu()
 
 
 from sglang.srt.managers.scheduler import Scheduler, IdleSleeper, GenerationBatchResult, EmbeddingBatchResult
-from r2r.models.batch_inference.llm_tp_worker import LLMTpModelWorker
+from r2r.models.sglang_patch.llm_tp_worker import LLMTpModelWorker
 
 
 class LLMScheduler(Scheduler):

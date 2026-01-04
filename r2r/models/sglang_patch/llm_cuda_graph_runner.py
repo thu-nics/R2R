@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
 logger = logging.getLogger(__name__)
 
-import r2r.models.batch_inference.flashinfer_cuda_graph
+import r2r.models.sglang_patch.flashinfer_cuda_graph
 
 PREFIX_LEN = 8
 

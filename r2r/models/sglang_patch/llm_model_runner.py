@@ -117,7 +117,7 @@ from sglang.srt.weight_sync.tensor_bucket import (
 
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner, RankZeroFilter
-from r2r.models.batch_inference.llm_cuda_graph_runner import LLMCudaGraphRunner
+from r2r.models.sglang_patch.llm_cuda_graph_runner import LLMCudaGraphRunner
 
 
 _is_hip = is_hip()

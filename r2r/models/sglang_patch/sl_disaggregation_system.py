@@ -15,8 +15,8 @@ os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29500"
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
-from r2r.models.batch_inference.slm_server import SLMServer
-from r2r.models.batch_inference.llm_server import LLMServer
+from r2r.models.sglang_patch.slm_server import SLMServer
+from r2r.models.sglang_patch.llm_server import LLMServer
 from r2r.utils.config import (
     MODEL_DICT,
     QUICK_COLOR,
@@ -35,7 +35,7 @@ from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.configs.model_config import ModelConfig
 
-import r2r.models.batch_inference.patch
+import r2r.models.sglang_patch.patch
 
 
 def get_mem_fraction_statics(overlap_tp_schedule: bool = False, quick_sglang_kwargs: Dict = {}, reference_sglang_kwargs: Dict = {}, quick_num_gpus: int = 1, reference_num_gpus: int = 1) -> Tuple[float, float]:

@@ -26,8 +26,8 @@ from r2r.utils.switching import create_switching_strategy
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
-from r2r.models.batch_inference.schedule_req import WaitingReq, SimpleSamplingParams
-from r2r.models.batch_inference.llm_scheduler import LLMScheduler
+from r2r.models.sglang_patch.schedule_req import WaitingReq, SimpleSamplingParams
+from r2r.models.sglang_patch.llm_scheduler import LLMScheduler
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton

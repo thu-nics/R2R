@@ -1,7 +1,7 @@
 import requests
 import time
 
-url = "http://0.0.0.0:30005/v1/chat/completions"
+url = "http://0.0.0.0:30000/v1/chat/completions"
 
 # OpenAI-compatible chat completion request
 data = {

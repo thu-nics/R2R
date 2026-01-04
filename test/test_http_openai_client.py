@@ -11,7 +11,7 @@ from openai import OpenAI
 
 # Configure the OpenAI client to use our local server
 client = OpenAI(
-    base_url="http://0.0.0.0:30005/v1",
+    base_url="http://0.0.0.0:30000/v1",
     api_key="not-needed"  # API key is not required for local server
 )
 
