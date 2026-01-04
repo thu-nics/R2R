@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +10,43 @@ import math
 import inspect
 from transformers import AutoModelForCausalLM
 from typing import List
+
+
+def load_config_from_folder(folder_path: str) -> dict:
+    """Load model_configs.json and router path from a folder.
+
+    Args:
+        folder_path: Path to folder containing model_configs.json and router.pt
+
+    Returns:
+        dict with keys:
+            - model_config: dict from model_configs.json
+            - router_path: path to router weights file
+    """
+    model_configs_path = os.path.join(folder_path, "model_configs.json")
+    with open(model_configs_path, "r") as f:
+        model_config = json.load(f)
+
+    # Look for router weights file (try common names)
+    router_candidates = ["router.pt", "default_router.pt"]
+    router_path = None
+    for candidate in router_candidates:
+        candidate_path = os.path.join(folder_path, candidate)
+        if os.path.isfile(candidate_path):
+            router_path = candidate_path
+            break
+
+    if router_path is None:
+        # Try to find any .pt file
+        for filename in os.listdir(folder_path):
+            if filename.endswith(".pt"):
+                router_path = os.path.join(folder_path, filename)
+                break
+
+    return {
+        "model_config": model_config,
+        "router_path": router_path
+    }
 
 ################ Model Registry, Saving and Loading #################
 MODEL_REGISTRY = {}

@@ -7,7 +7,6 @@ import torch.distributed as dist
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -29,6 +28,7 @@ class DynamicSimpleSGLangSelector:
 
     def __init__(
         self,
+        model_config: dict,
         device: Optional[str] = "cuda",
         dtype: torch.dtype = torch.bfloat16,
         switching_strategy: str = "neural",
@@ -39,14 +39,15 @@ class DynamicSimpleSGLangSelector:
     ):
         self.device = device
         self.dtype = dtype
+        self.model_config = model_config
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy_name = switching_strategy
         self.is_record = is_record
-        
+
         # Combine default with provided kwargs
         quick_sglang_kwargs = {**(sglang_kwargs or {})}
         reference_sglang_kwargs = {**(sglang_kwargs or {})}
-        
+
         self.num_gpus = reference_sglang_kwargs.get("tp_size", torch.cuda.device_count())
         self.world_size = self.num_gpus
 
@@ -54,20 +55,20 @@ class DynamicSimpleSGLangSelector:
         self.generation_records = {}
 
         # Currently only support tp_size=1 for quick model
-        quick_sglang_kwargs["tp_size"] = 1 
+        quick_sglang_kwargs["tp_size"] = 1
         reference_sglang_kwargs["tp_size"] = self.world_size
         assert self.num_gpus >= 2, f"Using {self.num_gpus} GPUs for SGLang, expected larger than 2."
         print(f"Using {self.num_gpus} GPUs for SGLang, with {self.world_size} for reference and 1 for quick.")
 
         # Initialize SGLang models
-        print(f"Loading quick model {MODEL_DICT['quick']['model_name']}...")
+        print(f"Loading quick model {self.model_config['quick']['model_path']}...")
 
         self.quick_server_args = ServerArgs(
-            model_path=MODEL_DICT["quick"]["model_path"], 
-            disable_cuda_graph=False, 
+            model_path=self.model_config["quick"]["model_path"],
+            disable_cuda_graph=False,
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["quick"]["mem_fraction_static"],
+            mem_fraction_static=self.model_config["quick"].get("mem_fraction_static", 0.9),
             **quick_sglang_kwargs,
         )
         quick_port_args = PortArgs.init_new(self.quick_server_args)
@@ -85,13 +86,13 @@ class DynamicSimpleSGLangSelector:
         # # warm up the quick model
         self.warm_up_quick_model()
 
-        print(f"Loading reference model {MODEL_DICT['reference']['model_name']}...")
+        print(f"Loading reference model {self.model_config['reference']['model_path']}...")
         self.reference_server_args = ServerArgs(
-            model_path=MODEL_DICT["reference"]["model_path"],
-            disable_cuda_graph=True, 
+            model_path=self.model_config["reference"]["model_path"],
+            disable_cuda_graph=True,
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["reference"]["mem_fraction_static"],
+            mem_fraction_static=self.model_config["reference"].get("mem_fraction_static", 0.9),
             **reference_sglang_kwargs,
         )
 
@@ -522,10 +523,10 @@ class DynamicSimpleSGLangSelector:
                         if model_choices[i].item() == 1:  # Use reference model
                             # update next token ids
                             source_model = "reference"
-                            param_size = float(MODEL_DICT["reference"]["param"])
+                            param_size = float(self.model_config["reference"]["param"])
                         else:  # Use quick model
                             source_model = "quick"
-                            param_size = float(MODEL_DICT["quick"]["param"])
+                            param_size = float(self.model_config["quick"]["param"])
 
                         token = next_token_ids[i].item()
                         token_str = self.tokenizer.decode(token)
@@ -574,7 +575,7 @@ class DynamicSimpleSGLangSelector:
                                 source_model="quick",
                                 position=position,
                                 batch_id=seq_idx,
-                                param_size=float(MODEL_DICT["quick"]["param"]),
+                                param_size=float(self.model_config["quick"]["param"]),
                             )
                         )
 

@@ -4,17 +4,16 @@ os.environ.setdefault('MASTER_PORT', '29500')
 import sys
 import time
 import argparse
+import json
 import torch
 import multiprocessing as mp
-import sglang as sgl # Added for SGLang engine
+import sglang as sgl
 from transformers import AutoTokenizer
 import warnings
 
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
-from r2r.utils.config import (
-    QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM,
-    MODEL_DICT
-)
+from r2r.models.router import load_config_from_folder
+from r2r.utils.config import QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -67,22 +66,20 @@ def print_colored(text, color_segments):
     sys.stdout.flush()
 
 
-def run_simple_sglang_mode(args):
+def run_simple_sglang_mode(args, base_model_path: str):
     print(f"Running in Native SGLang LLM")
-    if not args.base_model_path:
-        print("Error: Base model path is not configured. Please set reference model in config or provide --base_model_path.")
+    if not base_model_path:
+        print("Error: Base model path is not configured. Please provide --config-folder or --base-model-path.")
         return
     
     llm_engine = None
     try:
         llm_engine = sgl.Engine(
-            model_path=args.base_model_path,
+            model_path=base_model_path,
             tp_size=args.tp_size,
             skip_tokenizer_init=True,
-            # Add other sgl.Engine parameters if needed, e.g., dtype="bfloat16"
-            # Based on your other SGLang uses, you might want to specify dtype
         )
-        tokenizer = AutoTokenizer.from_pretrained(args.base_model_path)
+        tokenizer = AutoTokenizer.from_pretrained(base_model_path)
     except Exception as e:
         print(f"Failed to initialize SGLang Engine: {e}")
         if llm_engine: # Should not be necessary here, but good practice
@@ -167,24 +164,24 @@ def run_simple_sglang_mode(args):
         llm_engine.shutdown()
 
 
-def run_dynamic_sglang_mode(args):
-    print(f"Running in Dynamic SGLang mode with classifier: {args.router_path}")
+def run_dynamic_sglang_mode(args, model_config: dict, router_path: str):
+    print(f"Running in Dynamic SGLang mode with classifier: {router_path}")
     print(f"Using TP size: {args.tp_size}")
 
     strategy_kwargs = {
-        'model_path': args.router_path
+        'model_path': router_path
     }
     if args.neural_threshold:
         strategy_kwargs['threshold'] = args.neural_threshold
 
-    ref_model_path = args.reference_model_path if args.reference_model_path else MODEL_DICT['reference']['model_path']
-    qck_model_path = args.quick_model_path if args.quick_model_path else MODEL_DICT['quick']['model_path']
+    ref_model_path = model_config['reference']['model_path']
+    qck_model_path = model_config['quick']['model_path']
 
     if not ref_model_path:
-        print("Error: Reference model path is not configured for SGLang. Please set REFERENCE_MODEL_NAME_OR_PATH in config or provide --reference_model_path.")
+        print("Error: Reference model path is not configured. Check model_configs.json.")
         return
     if not qck_model_path:
-        print("Error: Quick model path is not configured for SGLang. Please set QUICK_MODEL_NAME_OR_PATH in config or provide --quick_model_path.")
+        print("Error: Quick model path is not configured. Check model_configs.json.")
         return
 
     sglang_kwargs = {
@@ -193,11 +190,12 @@ def run_dynamic_sglang_mode(args):
     }
 
     generator = DynamicSimpleSGLangSelector(
-        device="cuda", 
+        model_config=model_config,
+        device="cuda",
         dtype=torch.bfloat16,
         switching_strategy='neural',
         strategy_kwargs=strategy_kwargs,
-        is_record=False, 
+        is_record=False,
         sglang_kwargs=sglang_kwargs
     )
 
@@ -274,36 +272,48 @@ def run_dynamic_sglang_mode(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive Chat with SGLang (Simple or Dynamic Mode)")
-    parser.add_argument('--router_path', type=str, default=None,
-                        help='Path to the critical classifier model. If None, runs in simple SGLang mode.')
-    
-    parser.add_argument('--base_model_path', type=str, default=None,
-                        help='Path to the base LLM for simple SGLang mode. Defaults to reference model from config.py if not set.')
-    parser.add_argument('--reference_model_path', type=str, default=None,
-                        help='Path to the reference model for SGLang dynamic mode. Defaults to reference model from config.py if not set.')
-    parser.add_argument('--quick_model_path', type=str, default=None,
-                        help='Path to the quick model for SGLang dynamic mode. Defaults to quick model from config.py if not set.')
+    parser.add_argument('--config-folder', type=str, default=None,
+                        help='Path to config folder containing model_configs.json and router.pt')
+    parser.add_argument('--base-model-path', type=str, default=None,
+                        help='Path to the base LLM for simple SGLang mode (used when --config-folder not provided)')
+    parser.add_argument('--simple-mode', action='store_true',
+                        help='Run in simple SGLang mode (single model) instead of dynamic R2R mode')
 
-    parser.add_argument('--tp_size', type=int, default=TOTAL_GPU_NUM if TOTAL_GPU_NUM > 0 else 1,
+    parser.add_argument('--tp-size', type=int, default=TOTAL_GPU_NUM if TOTAL_GPU_NUM > 0 else 1,
                         help='Tensor parallelism size for SGLang. Defaults to TOTAL_GPU_NUM or 1.')
     parser.add_argument('--temperature', type=float, default=0.0,
                         help='Temperature for sampling.')
-    parser.add_argument('--top_p', type=float, default=1.0,
+    parser.add_argument('--top-p', type=float, default=1.0,
                         help='Top-p for nucleus sampling.')
-    parser.add_argument('--max_new_tokens', type=int, default=32768,
+    parser.add_argument('--max-new-tokens', type=int, default=32768,
                         help='Maximum new tokens to generate.')
-    parser.add_argument('--neural_threshold', type=float, default=0.5,
+    parser.add_argument('--neural-threshold', type=float, default=0.5,
                         help='Threshold for the neural switching strategy (default: 0.5).')
 
     args = parser.parse_args()
 
-    if args.router_path:
-        # This mode already uses SGLang via DynamicSimpleSGLangSelector
-        run_dynamic_sglang_mode(args)
+    # Load config from folder if provided
+    model_config = None
+    router_path = None
+    if args.config_folder:
+        config = load_config_from_folder(args.config_folder)
+        model_config = config["model_config"]
+        router_path = config["router_path"]
+
+    if args.simple_mode or (not args.config_folder and args.base_model_path):
+        # Simple mode: single model inference
+        base_model_path = args.base_model_path
+        if base_model_path is None and model_config:
+            base_model_path = model_config['reference']['model_path']
+        run_simple_sglang_mode(args, base_model_path)
+    elif args.config_folder:
+        # Dynamic R2R mode with config folder
+        run_dynamic_sglang_mode(args, model_config, router_path)
     else:
-        if args.base_model_path is None:
-            args.base_model_path = MODEL_DICT['reference']['model_path']
-        run_simple_sglang_mode(args) # Changed here
+        print("Error: Please provide --config-folder for R2R mode or --base-model-path for simple mode.")
+        print("Usage examples:")
+        print("  R2R mode:    python interactive_chat.py --config-folder resource/Qwen3-0.6B+Qwen3-8B")
+        print("  Simple mode: python interactive_chat.py --base-model-path Qwen/Qwen3-8B --simple-mode")
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
