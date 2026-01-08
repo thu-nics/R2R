@@ -900,11 +900,7 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
             print(f"Successfully copied weights from {pretrained_model_name} embeddings")
         except Exception as e:
             print(f"Failed to load pretrained model: {e}")
-            # Create a simple embedding layer as fallback
-            vocab_size = 50257  # Default GPT-2 vocab size
-            embed_dim = hidden_dims[0]
-            self.token_embeddings = nn.Embedding(vocab_size, embed_dim)
-            print(f"Using randomly initialized embeddings")
+            raise e
 
         if self.freeze_lm_head:
             self.token_embeddings.weight.requires_grad = False
