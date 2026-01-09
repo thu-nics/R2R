@@ -24,6 +24,7 @@
 *.mdc
 *.whl
 *.sh
+!test/test_speed.sh
 *.svg
 *.code-workspace
 *.parquet
