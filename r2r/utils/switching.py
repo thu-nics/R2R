@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import os
 import sys
 import random
+from tqdm import tqdm
 
 from r2r.utils.metrics import compute_logu, compute_entropy
 from r2r.models.router import load_model
@@ -171,7 +172,7 @@ class NeuralSwitching(ModelSwitchingStrategy):
     """Neural network-based switching using a trained critical case classifier"""
 
     def __init__(
-        self, model_path, threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32
+        self, model_path, threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, use_cuda_graph=True
     ):
         super().__init__()
         self.device = device
@@ -203,6 +204,95 @@ class NeuralSwitching(ModelSwitchingStrategy):
         # Set model to evaluation mode
         self.model.eval()
 
+        self.use_cuda_graph = use_cuda_graph
+        if self.use_cuda_graph:
+            self.capture_bs = list(range(16, 0, -1))  # Capture for batch sizes 16 to 1
+            self.max_bs = max(self.capture_bs)
+            vocab_size = self.model.token_embeddings.num_embeddings
+            hidden_states_size = model_config["init_args"]["hidden_states_size"]
+            self.model_outputs_buffer = {
+                "logits": torch.zeros((self.max_bs, vocab_size), device=self.device, dtype=torch.float32),
+                "hidden_states": torch.zeros((self.max_bs, hidden_states_size), device=self.device, dtype=torch.float32),
+                "token": torch.zeros((self.max_bs,), device=self.device, dtype=torch.long),
+            }
+            self.model_choices_buffer = torch.zeros((self.max_bs,), device=self.device, dtype=torch.int)
+            with torch.no_grad():
+                self.capture()
+    
+    def capture(self):
+        if not self.use_cuda_graph:
+            return
+        # Capture CUDA graphs for different batch sizes
+        self.cuda_graphs = {}
+        for bs in tqdm(self.capture_bs):
+            # Warm-up
+            self.capture_one_batch_size(bs)
+
+            # Capture graph
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g):
+                self.capture_one_batch_size(bs)
+            self.cuda_graphs[bs] = g
+
+    def capture_one_batch_size(self, batch_size: int):
+        if "logits" in self.input_type:
+            # If the model has a logits_size parameter, use it to get top-k logits
+            if self.logits_size > 0:
+                top_logits, _ = torch.topk(
+                    self.model_outputs_buffer["logits"][:batch_size], k=self.logits_size, dim=-1
+                )
+            input_logits = top_logits.to(device=self.device, dtype=torch.float32) if self.logits_size > 0 else self.model_outputs_buffer["logits"][:batch_size].to(device=self.device, dtype=torch.float32)
+        else:
+            input_logits = None
+        
+        # Process hidden states if needed
+        if "hidden_states" in self.input_type:
+            input_hidden_states = self.model_outputs_buffer["hidden_states"][:batch_size].to(
+                device=self.device, dtype=torch.float32
+            )
+        else:
+            input_hidden_states = None
+        
+        # Process token IDs if needed
+        if "token" in self.input_type:
+            input_token = self.model_outputs_buffer["token"][:batch_size].to(
+                device=self.device, dtype=torch.long
+            )
+        else:
+            input_token = None
+        
+        model_output = self.model(logits=input_logits, hidden_states=input_hidden_states, token=input_token)
+            
+        # Handle different output formats (single output or multi-class)
+        if model_output.shape[1] == 1:
+            critical_prob = torch.sigmoid(model_output).squeeze(-1)  # [batch_size]
+            # Convert probabilities to binary decisions (0 = quick, 1 = reference)
+            self.model_choices_buffer[:batch_size].copy_((critical_prob >= self.threshold).to(torch.int))
+        else:
+            # For multi-class output, consider class 2 as critical (divergent) cases
+            # Classes: 0=match, 1=mismatch, 2=divergent
+            probabilities = torch.softmax(model_output, dim=1)  # [batch_size, num_classes]
+            critical_prob = probabilities[:, 2]  # Get probability of class 2 (divergent)
+            self.model_choices_buffer[:batch_size].copy_((critical_prob >= self.threshold).to(torch.int))
+
+    def replay(self, outputs: ModelOutputs):
+        batch_size = outputs.logits.shape[0]
+        # Prepare inputs based on input_type
+        if "logits" in self.input_type:
+            self.model_outputs_buffer["logits"][:batch_size].copy_(outputs.logits[:, -1, :].to(device=self.device, dtype=torch.float32))
+        
+        if "hidden_states" in self.input_type:
+            self.model_outputs_buffer["hidden_states"][:batch_size].copy_(outputs.hidden_states[-1][:, -1, :].to(device=self.device, dtype=torch.float32))
+        
+        if "token" in self.input_type:
+            self.model_outputs_buffer["token"][:batch_size].copy_(outputs.token[:, -1].to(device=self.device, dtype=torch.long))
+        
+        # Replay the captured CUDA graph
+        g = self.cuda_graphs[batch_size]
+        g.replay()
+        
+        return self.model_choices_buffer[:batch_size]
+
     def route(self, outputs: ModelOutputs) -> torch.Tensor:
         """
         Determine which model to use for each input in the batch.
@@ -213,10 +303,18 @@ class NeuralSwitching(ModelSwitchingStrategy):
                 0 = use quick model
                 1 = use reference model
         """
+        
+        batch_size = outputs.logits.shape[0]
+
         with torch.no_grad():
             # Get batch size from outputs
+            if self.use_cuda_graph and batch_size in self.capture_bs:
+                model_choices = self.replay(outputs)
+                # For tracking state, we'll keep the most recent decision for each input
+                self.state.last_model = "reference" if model_choices.any().item() else "quick"
+                return model_choices
+
             next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
-            batch_size = next_token_logits.shape[0]
             
             # Prepare inputs based on input_type
             inputs = {}
