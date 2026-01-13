@@ -210,19 +210,29 @@ If you have questions about any aspect of R2R, please open an issue. We're happy
 
 Explore more efficient LLM projects from us:
 
-<p align="center">
-  <a href="https://github.com/thu-nics/TaH"><img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" height="90px" /></a>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://github.com/thu-nics/C2C"><img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" height="90px" /></a>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://github.com/thu-nics/FrameFusion"><img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.jpeg" height="90px" /></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/thu-nics/TaH"><b>TaH</b></a> · Selective latent thinking for reasoning LLMs
-  &nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="https://github.com/thu-nics/C2C"><b>C2C</b></a> · Direct KV-cache communication between LLMs
-  &nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="https://github.com/thu-nics/FrameFusion"><b>FrameFusion</b></a> · Efficient video token reduction for LVLMs
-</p>
+<table border="0" align="center">
+<tr>
+<td align="center" width="200">
+<a href="https://github.com/thu-nics/TaH">
+<img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" height="80px" />
+<br/><b>TaH</b>
+</a>
+<br/><sub>Selective latent thinking for reasoning LLMs</sub>
+</td>
+<td align="center" width="200">
+<a href="https://github.com/thu-nics/C2C">
+<img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" height="80px" />
+<br/><b>C2C</b>
+</a>
+<br/><sub>Direct KV-cache communication between LLMs</sub>
+</td>
+<td align="center" width="200">
+<a href="https://github.com/thu-nics/FrameFusion">
+<img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.jpeg" height="80px" />
+<br/><b>FrameFusion</b>
+</a>
+<br/><sub>Efficient video token reduction for LVLMs</sub>
+</td>
+</tr>
+</table>
 
