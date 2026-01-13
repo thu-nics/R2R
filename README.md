@@ -53,7 +53,7 @@ bash setup_env.sh
 `setup_env.sh` installs `flashinfer==0.2.3`. Make sure you install a FlashInfer build that matches your CUDA version. If your system uses a different CUDA version, install the corresponding FlashInfer package for your setup.
 
 <details>
-<summary>💡 Troubleshooting</summary>
+<summary>Troubleshooting</summary>
 
 ```bash
 pip uninstall flashinfer-python
@@ -104,7 +104,7 @@ To train a custom R2R router for any LLM-SLM pair, you need to:
 > 💡 Remember to edit `r2r/utils/model_configs.json` according to your training setup before running the following steps.
 
 <details>
-<summary>📦 Click to see detailed training instructions</summary>
+<summary>Click to see detailed training instructions</summary>
 
 #### 3.1 Dataset Preparation
 
@@ -202,7 +202,7 @@ The training script accepts the config file that specifies model architecture, d
 
 </details>
 
-### Pretrained routers
+## 🔗 Pretrained routers
 
 | Small Language Model | Large Language Model | Router Link |
 |-----|-----|-------------|
@@ -214,43 +214,51 @@ The training script accepts the config file that specifies model architecture, d
 | Qwen3-4B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-4B%2BQwen-8B) |
 
 
-### Happy to help
+## 🙌 Happy to help
 
 If you have questions about any aspect of R2R, please open an issue. We're happy to help and discuss!
 
-# Related Projects
+## 🌟 Related Projects
 
 Explore more efficient LLM projects from us:
 
-<table border="0" align="center">
+<table style="border: none; border-collapse: collapse;" align="center">
 <tr>
-<td align="center" width="200">
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/TaH">
-<img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" height="80px" />
-<br/><b>TaH</b>
+<img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
 </a>
+</div>
+<a href="https://github.com/thu-nics/TaH"><b>TaH</b></a>
 <br/><sub>Selective latent thinking for reasoning LLMs</sub>
 </td>
-<td align="center" width="200">
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/C2C">
-<img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" height="80px" />
-<br/><b>C2C</b>
+<img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
 </a>
-<br/><sub>Direct KV-cache communication between LLMs</sub>
+</div>
+<a href="https://github.com/thu-nics/C2C"><b>C2C</b></a>
+<br/><sub>Communicate through KV-Cache between LLMs</sub>
 </td>
-<td align="center" width="200">
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/FrameFusion">
-<img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.jpeg" height="80px" />
-<br/><b>FrameFusion</b>
+<img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
 </a>
+</div>
+<a href="https://github.com/thu-nics/FrameFusion"><b>FrF</b></a>
 <br/><sub>Efficient video token reduction for LVLMs</sub>
 </td>
-<td align="center" width="200">
+<td align="center" valign="top" width="25%" style="border: none; padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/MoA">
-<img src="https://raw.githubusercontent.com/thu-nics/MoA/master/resource/logo.png" height="80px" />
-<br/><b>MoA</b>
+<img src="https://raw.githubusercontent.com/thu-nics/MoA/master/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
 </a>
-<br/><sub>Mixture of sparse attention for LLM</sub>
+</div>
+<a href="https://github.com/thu-nics/MoA"><b>MoA</b></a>
+<br/><sub>Mixture of sparse attention for LLMs</sub>
 </td>
 </tr>
 </table>
