@@ -8,7 +8,7 @@
   <p>
     <a href="https://fuvty.github.io/R2R_Project_Page/">🌐 <b>Project Page</b></a> •
     <a href="https://arxiv.org/abs/2505.21600">📑 <b>arXiv</b></a> •
-    <a href="https://huggingface.co/papers/2505.21600">🤗 <b>HuggingFace</b></a>
+    <a href="https://huggingface.co/collections/nics-efc/r2r">🤗 <b>HuggingFace</b></a>
   </p>
 
 </div>
@@ -202,6 +202,18 @@ The training script accepts the config file that specifies model architecture, d
 
 </details>
 
+### Pretrained routers
+
+| Small Language Model | Large Language Model | Router Link |
+|-----|-----|-------------|
+| DeepSeek-R1-Distill-Qwen-1.5B | DeepSeek-R1-Distill-Qwen-32B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/DeepSeek-R1-Distill-Qwen-1.5B%2BDeepSeek-R1-Distill-Qwen-1.5B-32B) |
+| Qwen3-0.6B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-8B) |
+| Qwen3-0.6B | Qwen3-30B-A3B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-30B-A3B) |
+| Qwen3-0.6B | Qwen3-32B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-32B) |
+| Qwen3-1.7B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-1.7B%2BQwen3-8B) |
+| Qwen3-4B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-4B%2BQwen-8B) |
+
+
 ### Happy to help
 
 If you have questions about any aspect of R2R, please open an issue. We're happy to help and discuss!
@@ -232,6 +244,13 @@ Explore more efficient LLM projects from us:
 <br/><b>FrameFusion</b>
 </a>
 <br/><sub>Efficient video token reduction for LVLMs</sub>
+</td>
+<td align="center" width="200">
+<a href="https://github.com/thu-nics/MoA">
+<img src="https://raw.githubusercontent.com/thu-nics/MoA/master/resource/logo.png" height="80px" />
+<br/><b>MoA</b>
+</a>
+<br/><sub>Mixture of sparse attention for LLM</sub>
 </td>
 </tr>
 </table>
