@@ -52,12 +52,15 @@ bash setup_env.sh
 
 `setup_env.sh` installs `flashinfer==0.2.3`. Make sure you install a FlashInfer build that matches your CUDA version. If your system uses a different CUDA version, install the corresponding FlashInfer package for your setup.
 
-> If you accidentally install the wrong flashinfer, please uninstall it before re-installation.
-> ```bash
->pip uninstall flashinfer-python
->rm -rf ~/.cache/flashinfer/
->rm -rf ~/.triton/cache
->```
+<details>
+<summary>💡 Troubleshooting</summary>
+
+```bash
+pip uninstall flashinfer-python
+rm -rf ~/.cache/flashinfer/
+rm -rf ~/.triton/cache
+```
+</details>
 
 ## 🚀 Usage
 
@@ -100,9 +103,12 @@ To train a custom R2R router for any LLM-SLM pair, you need to:
 
 > 💡 Remember to edit `r2r/utils/model_configs.json` according to your training setup before running the following steps.
 
+<details>
+<summary>📦 Click to see detailed training instructions</summary>
+
 #### 3.1 Dataset Preparation
 
-We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow these steps to create your own dataset.
+We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow the steps below to create your own dataset.
 
 ##### Initialize Dataset Conversion
 
@@ -194,6 +200,51 @@ The training script accepts the config file that specifies model architecture, d
 
 >We also provide a recipe for the Qwen3 series. To use it, simply replace r2r/utils/model_configs.json with model_configs_Qwen3_series.json, and update args.test_model_list to use the corresponding small model as described in Step 1.
 
-## 🙌 Happy to help
+</details>
+
+### Happy to help
 
 If you have questions about any aspect of R2R, please open an issue. We're happy to help and discuss!
+
+# Related Projects
+
+Explore more efficient LLM projects from us:
+
+<div align="center">
+
+  <!-- <a href="https://github.com/thu-nics/R2R" style="text-decoration: none;">
+    <img src="https://raw.githubusercontent.com/thu-nics/R2R/main/resource/logo.png" height="120px" />
+    <br/>
+    <b>R2R</b><br/>
+    <sub>Token-level routing for efficient LLM inference</sub>
+  </a>
+
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -->
+
+  <a href="https://github.com/thu-nics/TaH" style="text-decoration: none;">
+    <img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" height="120px" />
+    <br/>
+    <b>TaH</b><br/>
+    <sub>Selective latent thinking for reasoning LLMs</sub>
+  </a>
+
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+  <a href="https://github.com/thu-nics/C2C" style="text-decoration: none;">
+    <img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" height="120px" />
+    <br/>
+    <b>C2C</b><br/>
+    <sub>Direct KV-cache communication between LLMs</sub>
+  </a>
+
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+  <a href="https://github.com/thu-nics/FrameFusion" style="text-decoration: none;">
+    <img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.jpeg" height="120px" />
+    <br/>
+    <b>FrameFusion</b><br/>
+    <sub>Efficient video token reduction for LVLMs</sub>
+  </a>
+
+</div>
+
