@@ -32,6 +32,9 @@ from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
 from r2r.models.sglang_patch.schedule_req import WaitingReq, SimpleSamplingParams
 
+# Module-level cache location tracker
+end_of_cache_loc = 0
+
 
 class SLMServer:
     """SLM Server launched by SGLang"""
@@ -56,7 +59,7 @@ class SLMServer:
         self.quick_num_gpus = quick_num_gpus
         self.req_port = req_port
         self.ready_queue = ready_queue
-        self._seq_counter = 0  # 全局单调递增序列号
+        self._seq_counter = 0  # Global monotonically increasing sequence number
         self.switching_strategy = switching_strategy
         self.strategy_kwargs = strategy_kwargs
         # Inter-server queues (outbound to LLM / inbound from LLM)
@@ -194,12 +197,12 @@ class SLMServer:
             proc = mp.Process(
                 target=self.quick_model_worker,
                 args=(
-                    rank, 
-                    quick_num_gpus, 
-                    quick_server_args, 
-                    self._rank_queues[rank], 
-                    self.ready_queue, 
-                    self.switching_strategy, 
+                    rank,
+                    quick_num_gpus,
+                    quick_server_args,
+                    self._rank_queues[rank],
+                    self.ready_queue,
+                    self.switching_strategy,
                     self.strategy_kwargs,
                     self._inbound_rank_queues[rank],  # per-rank inbound msgs
                     self.queue_to_llm,    # outbound (for potential direct worker usage),
@@ -222,16 +225,16 @@ class SLMServer:
 
     @staticmethod
     def quick_model_worker(
-        rank, 
-        world_size: int, 
-        server_args: ServerArgs, 
-        rank_queue: mp.Queue, 
+        rank,
+        world_size: int,
+        server_args: ServerArgs,
+        rank_queue: mp.Queue,
         ready_queue: Optional[mp.Queue] = None,
-        switching_strategy: str = "neural", 
-        strategy_kwargs: Dict = {}, 
-        inbound_queue: Optional[mp.Queue] = None, 
-        outbound_queue: Optional[mp.Queue] = None, 
-        finished_queue: Optional[mp.Queue] = None, 
+        switching_strategy: str = "neural",
+        strategy_kwargs: Dict = {},
+        inbound_queue: Optional[mp.Queue] = None,
+        outbound_queue: Optional[mp.Queue] = None,
+        finished_queue: Optional[mp.Queue] = None
     ):
         
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
@@ -283,9 +286,6 @@ class SLMServer:
         scheduler.batch_not_need.orig_seq_lens = torch.tensor([], dtype=torch.int64).to(
             scheduler.batch_not_need.device, non_blocking=True
         )
-        scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
-            scheduler.batch_not_need.device, non_blocking=True
-        )
         pbar_dict = {}
 
         try:
@@ -309,7 +309,7 @@ class SLMServer:
                     print(f"[quick rank{rank}] SHUTDOWN received (queue), exiting...")
                     break
                 if reqs:
-                    # 追加到本地缓冲（按 _seq 单调递增，无需排序）
+                    # Append to local buffer (monotonically increasing by _seq, no sorting needed)
                     pending_reqs.extend(reqs)
 
                 device = scheduler.batch_not_need.device
@@ -318,24 +318,24 @@ class SLMServer:
                 dist.all_gather(gather_info, len_local)
                 min_len = min(int(t.item()) for t in gather_info)
 
-                # ==== 序列对齐提交阶段 ====
-                # 只有在存在待提交请求时才做一次 all_gather
+                # ==== Sequence alignment commit phase ====
+                # Only do all_gather when there are pending requests to commit
                 if min_len > 0:
                     try:
                         local_max_seq = pending_reqs[-1]._seq
                     except AttributeError:
-                        # 如果上游未正确打序列号，直接全部提交（回退）
+                        # If upstream didn't set sequence number correctly, commit all (fallback)
                         commit_list = pending_reqs
                         pending_reqs = []
                     else:
-                        # 收集每个 rank 已看到的最大序列
+                        # Collect max sequence seen by each rank
                         t_local = torch.tensor([local_max_seq], device=device, dtype=torch.long)
                         gather_buf = [torch.zeros_like(t_local) for _ in range(world_size)]
                         dist.all_gather(gather_buf, t_local)
                         commit_seq = min(int(t.item()) for t in gather_buf)
-                        # 计算可提交前缀（所有 rank 至少已看到 commit_seq）
+                        # Calculate committable prefix (all ranks have seen at least commit_seq)
                         commit_end = 0
-                        # pending_reqs 按序号递增
+                        # pending_reqs is sorted by sequence number in ascending order
                         while commit_end < len(pending_reqs) and getattr(pending_reqs[commit_end], "_seq", -1) <= commit_seq:
                             commit_end += 1
                         if commit_end > 0:
@@ -478,9 +478,14 @@ class SLMServer:
         global end_of_cache_loc
         batch.forward_mode = ForwardMode.EXTEND
 
-        # Allocate req slots
+        # Allocate req slots - use existing req_pool_idx if set, otherwise use index
         bs = len(batch.reqs)
-        req_pool_indices = [req.rid for req in batch.reqs]
+        req_pool_indices = []
+        for i, req in enumerate(batch.reqs):
+            if req.req_pool_idx is not None:
+                req_pool_indices.append(req.req_pool_idx)
+            else:
+                req_pool_indices.append(i)
 
         # Init tensors
         reqs = batch.reqs
@@ -663,7 +668,7 @@ class SLMServer:
                         self._seq_counter += 1
                     except Exception:
                         pass
-                    # 分发到所有 rank 队列
+                    # Distribute to all rank queues
                     for q in self._rank_queues:
                         try:
                             q.put(req)
