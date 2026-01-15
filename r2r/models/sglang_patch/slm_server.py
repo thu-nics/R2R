@@ -450,6 +450,8 @@ class SLMServer:
                     if better_token_ids[req.rid] in scheduler.model_config.hf_eos_token_id:
                         scheduler.abort_request(AbortReq(req.rid))
                     req.output_ids.append(better_token_ids[req.rid])
+                    # Track LLM token generation
+                    req.llm_token_count = getattr(req, 'llm_token_count', 0) + 1
                     req.status = "need"
                     req.check_finished()
                     if req.finished():
@@ -698,6 +700,9 @@ class SLMServer:
                 continue
             item.eos_token_ids = scheduler.model_config.hf_eos_token_id
             item.vocab_size = scheduler.model_config.vocab_size
+            # Initialize token generation counters for tracking LLM vs SLM usage
+            item.slm_token_count = 0
+            item.llm_token_count = 0
             out.append(item)
         return out
 
@@ -713,6 +718,8 @@ class SLMServer:
             if next_token_id in scheduler.model_config.hf_eos_token_id:
                 scheduler.abort_request(AbortReq(req.rid))
             req.output_ids.append(next_token_id.item())
+            # Track SLM token generation
+            req.slm_token_count = getattr(req, 'slm_token_count', 0) + 1
             req.check_finished()
             if req.finished():
                 scheduler.tree_cache.cache_finished_req(req)
@@ -737,6 +744,9 @@ class SLMServer:
                 status="finished",
             ))
             if finished_queue is not None:
+                slm_count = getattr(req, 'slm_token_count', 0)
+                llm_count = getattr(req, 'llm_token_count', 0)
+                total_count = slm_count + llm_count
                 payload = {
                     "rid": getattr(req, "rid", None),
                     "origin_input_text": getattr(req, "origin_input_text", None),
@@ -744,6 +754,9 @@ class SLMServer:
                     "output_ids": list(getattr(req, "output_ids", [])),
                     "output_text": tokenizer.decode(getattr(req, "output_ids", [])),
                     "status": "finished",
+                    "slm_token_count": slm_count,
+                    "llm_token_count": llm_count,
+                    "llm_ratio": llm_count / total_count if total_count > 0 else 0.0,
                 }
                 try:
                     finished_queue.put_nowait(payload)

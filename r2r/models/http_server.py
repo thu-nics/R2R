@@ -16,7 +16,6 @@ import multiprocessing as mp
 from sglang.srt.managers.io_struct import GenerateReqInput as SGLangGenerateReqInput
 
 from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
-from r2r.models.router import load_config_from_folder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,10 +77,12 @@ async def lifespan(app: FastAPI):
     print("Initializing SLDisaggregationSystem inside lifespan...")
 
     if server_args:
-        # Load config from folder
-        config = load_config_from_folder(server_args.config_folder)
-        model_config = config["model_config"]
-        router_path = config["router_path"]
+        # Load config from path (file or folder)
+        config_path = server_args.config_path
+        with open(config_path, "r") as f:
+            model_config = json.load(f)
+        router_config = model_config.get("router", {})
+        router_path = router_config.get("router_path")
 
         quick_sglang_kwargs = {
             "dtype": "bfloat16",

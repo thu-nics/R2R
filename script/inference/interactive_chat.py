@@ -4,7 +4,6 @@ os.environ.setdefault('MASTER_PORT', '29500')
 import sys
 import time
 import argparse
-import json
 import torch
 import multiprocessing as mp
 import sglang as sgl
@@ -12,7 +11,7 @@ from transformers import AutoTokenizer
 import warnings
 
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
-from r2r.models.router import load_config_from_folder
+import yaml
 from r2r.utils.config import QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM
 
 # Suppress all warnings
@@ -69,7 +68,7 @@ def print_colored(text, color_segments):
 def run_simple_sglang_mode(args, base_model_path: str):
     print(f"Running in Native SGLang LLM")
     if not base_model_path:
-        print("Error: Base model path is not configured. Please provide --config-folder or --base-model-path.")
+        print("Error: Base model path is not configured. Please provide --config-path or --base-model-path.")
         return
     
     llm_engine = None
@@ -164,7 +163,8 @@ def run_simple_sglang_mode(args, base_model_path: str):
         llm_engine.shutdown()
 
 
-def run_dynamic_sglang_mode(args, model_config: dict, router_path: str):
+def run_dynamic_sglang_mode(args, model_config: dict, router_config: dict):
+    router_path = router_config.get("router_path")
     print(f"Running in Dynamic SGLang mode with classifier: {router_path}")
     print(f"Using TP size: {args.tp_size}")
 
@@ -178,10 +178,10 @@ def run_dynamic_sglang_mode(args, model_config: dict, router_path: str):
     qck_model_path = model_config['quick']['model_path']
 
     if not ref_model_path:
-        print("Error: Reference model path is not configured. Check model_configs.json.")
+        print("Error: Reference model path is not configured. Check config.yaml.")
         return
     if not qck_model_path:
-        print("Error: Quick model path is not configured. Check model_configs.json.")
+        print("Error: Quick model path is not configured. Check config.yaml.")
         return
 
     sglang_kwargs = {
@@ -272,10 +272,10 @@ def run_dynamic_sglang_mode(args, model_config: dict, router_path: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive Chat with SGLang (Simple or Dynamic Mode)")
-    parser.add_argument('--config-folder', type=str, default=None,
-                        help='Path to config folder containing model_configs.json and router.pt')
+    parser.add_argument('--config-path', type=str, default=None,
+                        help='Path to config.yaml containing router config')
     parser.add_argument('--base-model-path', type=str, default=None,
-                        help='Path to the base LLM for simple SGLang mode (used when --config-folder not provided)')
+                        help='Path to the base LLM for simple SGLang mode (used when --config-path not provided)')
     parser.add_argument('--simple-mode', action='store_true',
                         help='Run in simple SGLang mode (single model) instead of dynamic R2R mode')
 
@@ -294,25 +294,28 @@ def main():
 
     # Load config from folder if provided
     model_config = None
-    router_path = None
-    if args.config_folder:
-        config = load_config_from_folder(args.config_folder)
-        model_config = config["model_config"]
-        router_path = config["router_path"]
+    router_config = {}
+    if args.config_path:
+        config_path = args.config_path
+        if os.path.isdir(config_path):
+            config_path = os.path.join(config_path, "config.yaml")
+        with open(config_path, "r") as f:
+            model_config = yaml.safe_load(f)
+        router_config = model_config.get("router", {})
 
-    if args.simple_mode or (not args.config_folder and args.base_model_path):
+    if args.simple_mode or (not args.config_path and args.base_model_path):
         # Simple mode: single model inference
         base_model_path = args.base_model_path
         if base_model_path is None and model_config:
             base_model_path = model_config['reference']['model_path']
         run_simple_sglang_mode(args, base_model_path)
-    elif args.config_folder:
-        # Dynamic R2R mode with config folder
-        run_dynamic_sglang_mode(args, model_config, router_path)
+    elif args.config_path:
+        # Dynamic R2R mode with config file
+        run_dynamic_sglang_mode(args, model_config, router_config)
     else:
-        print("Error: Please provide --config-folder for R2R mode or --base-model-path for simple mode.")
+        print("Error: Please provide --config-path for R2R mode or --base-model-path for simple mode.")
         print("Usage examples:")
-        print("  R2R mode:    python interactive_chat.py --config-folder resource/Qwen3-0.6B+Qwen3-8B")
+        print("  R2R mode:    python interactive_chat.py --config-path config/local/Qwen3-0.6B+Qwen3-8B_local.yaml")
         print("  Simple mode: python interactive_chat.py --base-model-path Qwen/Qwen3-8B --simple-mode")
 
 if __name__ == "__main__":

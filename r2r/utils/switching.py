@@ -172,13 +172,13 @@ class NeuralSwitching(ModelSwitchingStrategy):
     """Neural network-based switching using a trained critical case classifier"""
 
     def __init__(
-        self, model_path, threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, use_cuda_graph=True
+        self, model_path, threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, use_cuda_graph=True, override_init_args: Optional[dict] = None
     ):
         super().__init__()
         self.device = device
         self.dtype = dtype
         # Load model using the load_model function from classifier.py
-        self.model, model_config = load_model(model_path, device=self.device)
+        self.model, model_config = load_model(model_path, device=self.device, override_init_args=override_init_args)
 
         # Use saved optimal threshold if available in common_args
         if threshold is None:
@@ -379,13 +379,14 @@ class NeuralRollingWindowSwitching(ModelSwitchingStrategy):
         threshold: Optional[float] = None,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
+        override_init_args: Optional[dict] = None,
     ):
         super().__init__()
         self.device = device
         self.dtype = dtype
 
         # Load model using the load_model function from classifier.py
-        self.model, model_config = load_model(model_path, device=self.device)
+        self.model, model_config = load_model(model_path, device=self.device, override_init_args=override_init_args)
 
         # Use saved optimal threshold if available in common_args
         if threshold is None:
@@ -492,7 +493,9 @@ class NeuralMultiInputSwitching(ModelSwitchingStrategy):
                  neural_window_size: int = 3,
                  threshold: Optional[float] = None,
                  device: str = 'cuda',
-                 dtype: torch.dtype = torch.float32):
+                 dtype: torch.dtype = torch.float32,
+                 override_init_args: Optional[str] = None,
+                 **kwargs):
         super().__init__()
         
         raise NotImplementedError
@@ -500,7 +503,7 @@ class NeuralMultiInputSwitching(ModelSwitchingStrategy):
         self.device = device
         self.dtype = dtype
         # Load model using the load_model function from classifier.py
-        self.model, model_config = load_model(model_path, device=self.device)
+        self.model, model_config = load_model(model_path, device=self.device, override_init_args=override_init_args)
         
         # Use saved optimal threshold if available in common_args
         if 'threshold' in model_config['common_args'] and model_config['common_args']['threshold'] is not None and threshold is None:

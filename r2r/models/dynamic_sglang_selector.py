@@ -116,6 +116,10 @@ class DynamicSimpleSGLangSelector:
         self.warm_up_reference_model()
 
         # Initialize switching strategy
+        # Get override_init_args from router config
+        router_config = self.model_config.get('router', {})
+        override_init_args = router_config.get('override_init_args', {})
+        self.strategy_kwargs["override_init_args"] = override_init_args
         self.switching_strategy = create_switching_strategy(
             switching_strategy, **self.strategy_kwargs
         )
