@@ -35,6 +35,10 @@ from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.utils import broadcast_pyobj
 
+# Module-level cache location tracker
+end_of_cache_loc = 0
+
+
 class LLMServer:
     """LLM Server launched by SGLang"""
     def __init__(
@@ -198,8 +202,13 @@ class LLMServer:
         # Signal readiness
         if ready_queue is not None:
             try:
-                # 仅 rank0 发送 tokenizer，其它 rank 发送 None 占位，方便主控端一次性获取
-                ready_queue.put(("READY", rank, tokenizer if rank == 0 else None))
+                # Only rank0 sends tokenizer and max_running_requests
+                ready_queue.put((
+                    "READY",
+                    rank,
+                    tokenizer if rank == 0 else None,
+                    scheduler.max_running_requests if rank == 0 else None
+                ))
             except Exception as e:
                 print(f"[rank {rank}] failed to put READY: {e}")
         
@@ -278,7 +287,7 @@ class LLMServer:
     def process_result_from_slm(scheduler: Scheduler, commit_msgs):
         new_token_ids = {}
         returned_rid_list = []
-        finished_rid_list = torch.zeros(1000)
+        finished_rid_list = set()
         if scheduler.batch_not_need is not None:
             req_already_prefilled = [req.rid for req in scheduler.batch_not_need.reqs]
         else:
@@ -287,7 +296,7 @@ class LLMServer:
             new_token_ids[waiting_req.rid] = waiting_req.new_token_ids
             returned_rid_list.append(waiting_req.rid)
             if waiting_req.status == "finished":
-                finished_rid_list[waiting_req.rid] = 1
+                finished_rid_list.add(waiting_req.rid)
                 continue
             if waiting_req.rid not in req_already_prefilled:
                 origin_input_ids = waiting_req.new_token_ids
@@ -302,15 +311,14 @@ class LLMServer:
                     vocab_size=scheduler.model_config.vocab_size,
                     status="need",
                     last_cached_loc=[],
+                    device=scheduler.batch_not_need.device,
                 )
-                if not hasattr(new_req, 'device'):
-                    new_req.device = scheduler.batch_not_need.device
                 scheduler.waiting_queue.append(new_req)
 
         if scheduler.batch_not_need is not None:
             not_keep_indices = []
             for i, req in enumerate(scheduler.batch_not_need.reqs):
-                if finished_rid_list[req.rid] == 1:
+                if req.rid in finished_rid_list:
                     scheduler.tree_cache.cache_finished_req(req)
                     continue
                 if req.rid in returned_rid_list:
@@ -324,10 +332,9 @@ class LLMServer:
                         return_hidden_states=False,
                         status="need",
                         last_cached_loc=req.last_cached_loc,
+                        device=scheduler.batch_not_need.device,
                     )
                     new_req.req_pool_idx = req.req_pool_idx
-                    if not hasattr(new_req, 'device'):
-                        new_req.device = scheduler.batch_not_need.device
                     scheduler.waiting_queue.append(new_req)
                 else:
                     not_keep_indices.append(i)
@@ -336,7 +343,7 @@ class LLMServer:
 
     @staticmethod
     def fetch_and_align_inbound(inbound_queue: mp.Queue, rank: int, world_size: int, device: torch.device):
-        """与 SLM 一致：按 _seq 做跨 rank 对齐，并将未对齐部分缓存在进程内 map 中。"""
+        """Same as SLM: align across ranks by _seq, cache unaligned parts in process-local map."""
         if not hasattr(LLMServer, "_inbound_pending_map"):
             LLMServer._inbound_pending_map = {}  # { id(queue): list }
         pending_map = LLMServer._inbound_pending_map
@@ -559,9 +566,14 @@ class LLMServer:
         global end_of_cache_loc
         batch.forward_mode = ForwardMode.EXTEND
 
-        # Allocate req slots
+        # Allocate req slots - use existing req_pool_idx if set, otherwise use index
         bs = len(batch.reqs)
-        req_pool_indices = [req.rid for req in batch.reqs]
+        req_pool_indices = []
+        for i, req in enumerate(batch.reqs):
+            if req.req_pool_idx is not None:
+                req_pool_indices.append(req.req_pool_idx)
+            else:
+                req_pool_indices.append(i)
 
         # Init tensors
         reqs = batch.reqs

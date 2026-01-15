@@ -25,7 +25,8 @@ dependencies = [
     "scikit-learn",
     "setproctitle",
     "gradio",
-    "nvidia-ml-py"
+    "nvidia-ml-py",
+    "datasets>=2.20.0"
 ]
 
 [tool.uv]

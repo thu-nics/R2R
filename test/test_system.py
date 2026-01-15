@@ -116,10 +116,9 @@ def main():
     total_tokens = 0
     for obj in result:
         if isinstance(obj, dict):
-            total_tokens += len(obj.get("output_ids", [])) + len(obj.get("output_ids", []))
+            total_tokens += len(obj.get("output_ids", []))
         else:
-            total_tokens += len(obj.origin_input_ids) + len(obj.output_ids)
-    total_tokens /= 2
+            total_tokens += len(obj.output_ids)
     print(f"Generation completed in {end_time - start_time:.2f} seconds, total_tokens: {total_tokens}, speed: {total_tokens/(end_time - start_time):.2f}.")
 
     if result is not None:

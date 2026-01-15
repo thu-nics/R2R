@@ -250,7 +250,7 @@ class SLDisaggregationSystem:
             ref_tok = None
             while got_llm < self.reference_num_gpus:
                 ready_msg = self._llm_ready_queue.get(timeout=300)
-                # 兼容旧格式 (msg, rank) 或新格式 (msg, rank, tokenizer)
+                # Compatible with formats: (msg, rank), (msg, rank, tokenizer), (msg, rank, tokenizer, max_running)
                 if len(ready_msg) == 2:
                     msg, rank = ready_msg
                     tk = None
@@ -370,7 +370,7 @@ class SLDisaggregationSystem:
         quick_sampling_params = SamplingParams(temperature=0.0, top_p=1.0, top_k=-1, max_new_tokens=warmup_iter, stop=[])
         for i, (text, input_id) in enumerate(zip(input_text, input_ids)):
             req = Req(
-                rid=i,
+                rid=str(i),
                 origin_input_text=text,
                 origin_input_ids=input_id,
                 sampling_params=quick_sampling_params,
@@ -378,21 +378,21 @@ class SLDisaggregationSystem:
                 status="need",
             )
             req.display_progress = False
-            # 通过 ZMQ 发送 Req 对象到工作进程
+            # Send Req object to worker process via ZMQ
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
             except zmq.Again:
-                # 如果发送缓冲区满，稍等再试（简单退避）
+                # If send buffer is full, wait and retry (simple backoff)
                 time.sleep(0.01)
                 self.req_sender.send_pyobj(req)
-        
+
         time.sleep(5)
     
     def get_rid(self):
         with self.rid_lock:
             rid = self.rid
             self.rid += 1
-        return rid
+        return str(rid)
 
     def generate(
         self,
@@ -461,11 +461,11 @@ class SLDisaggregationSystem:
                 status="need",
             )
             req.display_progress = display_progress
-            # 通过 ZMQ 发送 Req 对象到工作进程
+            # Send Req object to worker process via ZMQ
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
             except zmq.Again:
-                # 如果发送缓冲区满，稍等再试（简单退避）
+                # If send buffer is full, wait and retry (simple backoff)
                 time.sleep(0.01)
                 self.req_sender.send_pyobj(req)
         # Wait until all rids appear in finished map
@@ -554,10 +554,10 @@ class SLDisaggregationSystem:
         display_progress: bool = False,
     ):
         tasks = []
-        
-        # 1. 创建所有任务
+
+        # 1. Create all tasks
         for i, input_id in enumerate(input_ids):
-            # 创建 task，立即开始执行
+            # Create task and start execution immediately
             task = asyncio.create_task(
                 self.generate_one_request(
                     input_id=input_id,
@@ -594,7 +594,7 @@ class SLDisaggregationSystem:
             )
             self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
         except zmq.Again:
-            # 如果发送缓冲区满，稍等再试（简单退避）
+            # If send buffer is full, wait and retry (simple backoff)
             time.sleep(0.01)
             self.req_sender.send_pyobj(req)
 
