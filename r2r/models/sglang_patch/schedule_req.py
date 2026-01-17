@@ -19,7 +19,7 @@ class SimpleSamplingParams:
 class WaitingReq:
     def __init__(
         self,
-        rid: int,
+        rid: str,
         new_token_ids: List[int],
         sampling_params: Optional[SimpleSamplingParams] = None,
         status: str = "need",
