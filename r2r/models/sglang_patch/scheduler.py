@@ -27,6 +27,7 @@ from http import HTTPStatus
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple, Union
 
+from multiprocessing import Value
 import psutil
 import setproctitle
 import torch
@@ -112,6 +113,7 @@ from sglang.srt.managers.schedule_policy import (
     AddReqResult,
     PrefillAdder,
     SchedulePolicy,
+    CLIP_MAX_NEW_TOKENS,
 )
 from sglang.srt.managers.scheduler_input_blocker import SchedulerInputBlocker
 from sglang.srt.managers.scheduler_metrics_mixin import (
@@ -181,6 +183,7 @@ def __init__(
     pp_rank: int,
     dp_rank: Optional[int],
     dp_balance_meta: Optional[DPBalanceMeta] = None,
+    llm_kvcache_size: Optional[Value] = None,
 ):
     # Parse args
     self.server_args = server_args
@@ -520,6 +523,10 @@ def __init__(
 
     self.recv_dp_balance_id_this_term = []
 
+    self.llm_kvcache_size = llm_kvcache_size
+
+    self.issued_reqs = set()
+
 def check_batch_status(self, batch: ScheduleBatch):
     """Check the status of requests in the batch and move not-need requests into batch-not-need."""
     self.batch_not_need.merge_batch(batch)
@@ -598,6 +605,108 @@ def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
 
     return ret
 
+class PrefillAdderSLM(PrefillAdder):
+    def __init__(
+        self,
+        page_size: int,
+        tree_cache,
+        token_to_kv_pool_allocator,
+        running_batch: ScheduleBatch,
+        issued_reqs: set,
+        new_token_ratio: float,
+        rem_input_tokens: int,
+        rem_chunk_tokens: Optional[int],
+        mixed_with_decode_tokens: int = 0,
+        llm_kvcache_size: Optional[Value] = None,
+    ):
+        super().__init__(page_size, tree_cache, token_to_kv_pool_allocator, running_batch, new_token_ratio, rem_input_tokens, rem_chunk_tokens, mixed_with_decode_tokens)
+        self.issued_reqs = issued_reqs
+        self.llm_kvcache_size = llm_kvcache_size
+    
+    @property
+    def rem_total_tokens(self):
+        rem_total_tokens_slm = super().rem_total_tokens
+        rem_total_tokens_llm = self.llm_kvcache_size.value
+        for req in self.issued_reqs:
+            rem_total_tokens_llm -= len(req.origin_input_ids) + req.sampling_params.max_new_tokens
+        return min(rem_total_tokens_slm, rem_total_tokens_llm)
+
+    def add_one_req(self, req: Req, has_chunked_req: bool):
+        if req.sampling_params.ignore_eos and getattr(self.tree_cache, "disable", True):
+            return self.add_one_req_ignore_eos(req, has_chunked_req)
+
+        total_tokens = req.extend_input_len + min(
+            req.sampling_params.max_new_tokens, CLIP_MAX_NEW_TOKENS
+        )
+
+        # adjusting the input_tokens based on host_hit_length and page_size
+        real_input_tokens = req.extend_input_len - req.host_hit_length
+        real_input_tokens = self.ceil_paged_tokens(real_input_tokens)
+        prefix_len = len(req.prefix_indices)
+
+        if total_tokens >= self.rem_total_tokens:
+            return AddReqResult.NO_TOKEN
+
+        if real_input_tokens >= self.rem_input_tokens and len(self.can_run_list) != 0:
+            return AddReqResult.OTHER
+
+        with self._lock_node(req.last_node):
+            # self.rem_total_tokens may decrease after the lock acquisition
+            if total_tokens >= self.rem_total_tokens:
+                return AddReqResult.NO_TOKEN
+
+            if req.host_hit_length > 0:
+                new_indices, req.last_node = self.tree_cache.init_load_back(
+                    req.last_host_node, req.host_hit_length
+                )
+                req.prefix_indices = torch.cat([req.prefix_indices, new_indices])
+                req.extend_input_len = len(req.fill_ids) - len(req.prefix_indices)
+                prefix_len = len(req.prefix_indices)
+
+            input_tokens = self.ceil_paged_tokens(req.extend_input_len)
+
+            if input_tokens >= self.rem_input_tokens and len(self.can_run_list) != 0:
+                return AddReqResult.OTHER
+
+            if self.rem_chunk_tokens is None or input_tokens <= self.rem_chunk_tokens:
+                # Non-chunked prefill
+                self.can_run_list.append(req)
+                if self.is_hybrid:
+                    swa_uuid_for_lock = self.tree_cache.inc_lock_ref(req.last_node)
+                    req.swa_uuid_for_lock = swa_uuid_for_lock
+                else:
+                    self.tree_cache.inc_lock_ref(req.last_node)
+                self._update_prefill_budget(
+                    prefix_len,
+                    input_tokens,
+                    min(
+                        req.sampling_params.max_new_tokens,
+                        CLIP_MAX_NEW_TOKENS,
+                    ),
+                )
+            else:
+                # Make sure at least one page is available
+                trunc_len = self.rem_chunk_tokens - self.page_size + 1
+                if trunc_len <= 0:
+                    return AddReqResult.OTHER
+
+                # Chunked prefill
+                req.extend_input_len = trunc_len
+                req.fill_ids = req.fill_ids[: len(req.prefix_indices) + trunc_len]
+
+                self.can_run_list.append(req)
+                self.new_chunked_req = req
+                if self.is_hybrid:
+                    swa_uuid_for_lock = self.tree_cache.inc_lock_ref(req.last_node)
+                    req.swa_uuid_for_lock = swa_uuid_for_lock
+                else:
+                    self.tree_cache.inc_lock_ref(req.last_node)
+                self._update_prefill_budget(prefix_len, trunc_len, 0)
+
+        return self.budget_state()
+
+
+
 def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
     # Check if the grammar is ready in the grammar queue
     if self.grammar_queue:
@@ -629,15 +738,17 @@ def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
     self.policy.calc_priority(self.waiting_queue)
 
     # Prefill policy
-    adder = PrefillAdder(
+    adder = PrefillAdderSLM(
         self.page_size,
         self.tree_cache,
         self.token_to_kv_pool_allocator,
         self.running_batch,
+        self.issued_reqs,
         self.new_token_ratio,
         self.max_prefill_tokens,
         self.chunked_prefill_size,
         running_bs if self.is_mixed_chunk else 0,
+        self.llm_kvcache_size,
     )
 
     if self.chunked_req is not None:
@@ -688,6 +799,8 @@ def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
                 else:
                     self.running_batch.batch_is_full = True
             break
+        else:
+            self.issued_reqs.add(req)
 
     # Update waiting queue
     can_run_list: List[Req] = adder.can_run_list

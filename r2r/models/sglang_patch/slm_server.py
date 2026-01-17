@@ -12,6 +12,7 @@ import signal
 import os
 import threading
 import queue
+from multiprocessing import Value
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -45,6 +46,7 @@ class SLMServer:
         switching_strategy: str = "neural",
         strategy_kwargs: Dict = {},
         mem_fraction_static: Optional[float] = None,
+        llm_kvcache_size: Optional[Value] = None,
     ):
         self.quick_waiting_line = []
         self.is_reset_cache = False
@@ -180,6 +182,7 @@ class SLMServer:
                     self.queue_to_llm,    # outbound (for potential direct worker usage),
                     self._finished_reqs_queue,  # finished reqs back to system
                     req_port if rank == 0 else None,  # system SUB only on rank 0
+                    llm_kvcache_size,
                 ),
             )
             proc.start()
@@ -220,6 +223,7 @@ class SLMServer:
         outbound_queue: Optional[mp.Queue] = None,
         finished_queue: Optional[mp.Queue] = None,
         req_port: Optional[int] = None,
+        llm_kvcache_size: Optional[Value] = None,
     ):
         
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
@@ -234,6 +238,7 @@ class SLMServer:
             dp_rank=0,
             moe_ep_rank=0,
             pp_rank=0,
+            llm_kvcache_size=llm_kvcache_size,
         )
         # Setup system SUB socket on rank 0
         if req_port is not None:
@@ -503,6 +508,9 @@ class SLMServer:
             scheduler.batch_not_need.filter_batch(keep_indices=not_keep_indices)
             if finished_reqs and rank == 0:
                 SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue, outbound_queue)
+            if finished_reqs:
+                for req in finished_reqs:
+                    scheduler.issued_reqs.remove(req)
     
     @staticmethod
     def simple_prepare_for_extend(batch: ScheduleBatch):
@@ -687,6 +695,9 @@ class SLMServer:
 
         if len(finished_reqs) > 0 and rank == 0:
             SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue, outbound_queue)
+        if len(finished_reqs) > 0:
+            for req in finished_reqs:
+                scheduler.issued_reqs.remove(req)
 
 
     def process_finished_requests(finished_reqs: List[Req], tokenizer, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):

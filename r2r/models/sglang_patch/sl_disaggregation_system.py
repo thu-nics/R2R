@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 import threading
 import asyncio
 import os
+from multiprocessing import Value
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "29500"
 
@@ -200,6 +201,7 @@ class SLDisaggregationSystem:
             * torch._utils._element_size(self.kv_cache_dtype)
         )
         """
+        self.llm_kvcache_size = Value('i', 0)
 
         # Launch quick model workers with req_port(port that receive Req objects)
         # Inter-server queues (Q2): create before servers so workers can use them
@@ -213,6 +215,7 @@ class SLDisaggregationSystem:
             switching_strategy=self.switching_strategy,
             strategy_kwargs=self.strategy_kwargs,
             mem_fraction_static=small_mem_fraction_static,
+            llm_kvcache_size=self.llm_kvcache_size,
         )
 
         try:
@@ -242,6 +245,7 @@ class SLDisaggregationSystem:
             ready_queue=self._llm_ready_queue,
             overlap_tp_schedule=overlap_tp_schedule,
             mem_fraction_static=large_mem_fraction_static,
+            llm_kvcache_size=self.llm_kvcache_size,
         )
 
         try:

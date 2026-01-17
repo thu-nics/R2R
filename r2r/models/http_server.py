@@ -95,8 +95,8 @@ async def lifespan(app: FastAPI):
         }
 
         strategy_kwargs = {"model_path": router_path}
-        if server_args.router_threshold:
-            strategy_kwargs['threshold'] = server_args.router_threshold
+        if server_args.neural_threshold:
+            strategy_kwargs['threshold'] = server_args.neural_threshold
 
         try:
             system = SLDisaggregationSystem(

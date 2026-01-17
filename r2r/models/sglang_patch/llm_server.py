@@ -14,6 +14,7 @@ import torch.distributed as dist
 import threading
 import queue
 from transformers import AutoTokenizer
+from multiprocessing import Value
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
@@ -47,6 +48,7 @@ class LLMServer:
         ready_queue: Optional[mp.Queue] = None,
         overlap_tp_schedule: bool = False,
         mem_fraction_static: Optional[float] = None,
+        llm_kvcache_size: Optional[Value] = None,
     ):
         self.is_reset_cache = False
         self.shutdown_loop = False
@@ -137,6 +139,7 @@ class LLMServer:
         self._stop_event = threading.Event()
         self._recv_thread = None  # Deprecated broadcast SUB thread removed.
         self.reference_model_procs = []
+        self.llm_kvcache_size = llm_kvcache_size
         for rank in range(reference_num_gpus):
             proc = mp.Process(
                 target=self.reference_model_worker,
@@ -146,9 +149,10 @@ class LLMServer:
                     self.reference_num_gpus, 
                     reference_server_args, 
                     self.reference_master_port, 
-                    self.ready_queue, 
-                    self._inbound_queues,
-                    self.queue_to_slm),
+                    self.ready_queue,
+                    self._inbound_queues, 
+                    self.queue_to_slm,
+                    self.llm_kvcache_size if rank == 0 else None),
             )
             # Mark as daemon so that workers die when parent exits unexpectedly
             proc.daemon = True
@@ -156,7 +160,7 @@ class LLMServer:
             self.reference_model_procs.append(proc)
 
     @staticmethod
-    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
+    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, llm_kvcache_size: Optional[Value] = None):
         # Use a dedicated tcp init_method to avoid port collision with quick model's default 29500 store
         init_method = f"tcp://127.0.0.1:{master_port}"
         dist.init_process_group(backend='nccl', init_method=init_method, rank=rank, world_size=world_size)
@@ -171,6 +175,7 @@ class LLMServer:
             dp_rank=0,
             moe_ep_rank=0,
             pp_rank=0,
+            llm_kvcache_size=llm_kvcache_size,
         )
         print(f"[reference rank {rank}] attn_tp_rank: {scheduler.attn_tp_rank}")
         tokenizer = scheduler.tokenizer
