@@ -1,4 +1,6 @@
 import os
+os.environ['MASTER_ADDR'] = 'localhost'
+os.environ.setdefault('MASTER_PORT', '29500')
 os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
 
 import sys
@@ -10,9 +12,8 @@ import warnings
 import csv
 from datetime import datetime
 
-from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
-import json
-
+from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
+import yaml
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -43,12 +44,14 @@ def save_results_to_csv(csv_path: str, results: dict, append: bool = True):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test SLDisaggregationSystem - Speed Test")
+    parser = argparse.ArgumentParser(description="Test DynamicSimpleSGLangSelector - Speed Test")
     parser.add_argument('--config-path', type=str, 
                         default="config/local/DeepSeek-R1-Distill-Qwen-1.5B+DeepSeek-R1-Distill-Qwen-32B_local.yaml",
                         help='Path to config.yaml')
     parser.add_argument('--threshold', type=float, default=0.5,
                         help='Threshold for neural routing (fallback if not in config)')
+    parser.add_argument('--tp-size', type=int, default=None,
+                        help='Tensor parallelism size (defaults to available GPU count)')
     
     # Test parameters
     parser.add_argument('--decode-length', type=int, default=8192,
@@ -63,31 +66,40 @@ def main():
                         help='Top-k for sampling')
     
     # Debug options
-    parser.add_argument('--display-progress', action='store_true',
-                        help='Display progress during generation')
-    parser.add_argument('--overlap-tp-schedule', action='store_true',
-                        help='Enable overlap TP schedule')
+    parser.add_argument('--print-tokens', action='store_true',
+                        help='Print tokens during generation')
+    parser.add_argument('--record-generation', action='store_true',
+                        help='Record generation details')
     
     # Output options
     parser.add_argument('--output-csv', type=str, default=None,
                         help='Path to output CSV file for results')
+    
+    parser.add_argument('--record_generation', action='store_true',
+                        help='Record generation details')
     args = parser.parse_args()
 
     print("=" * 60)
-    print("SLDisaggregationSystem Speed Test")
+    print("DynamicSimpleSGLangSelector Speed Test")
     print("=" * 60)
 
     # Load config from path
     config_path = args.config_path
     if os.path.isdir(config_path):
         config_path = os.path.join(config_path, "config.yaml")
-    with open(config_path, "r") as f:
-        model_config = json.load(f)
+    with open(config_path, "r", encoding="utf-8") as f:
+        model_config = yaml.safe_load(f)
     router_config = model_config.get("router", {})
     router_path = router_config.get("router_path")
 
-    quick_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1, "enable_return_hidden_states": True}
-    reference_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1}
+    # Setup sglang kwargs
+    sglang_kwargs = {"dtype": "bfloat16"}
+    if args.tp_size is not None:
+        sglang_kwargs["tp_size"] = args.tp_size
+    else:
+        sglang_kwargs["tp_size"] = torch.cuda.device_count()
+
+    # Setup strategy kwargs
     strategy_kwargs = {"model_path": router_path}
     
     # Priority: config file's router.threshold > command line arg
@@ -99,18 +111,16 @@ def main():
         strategy_kwargs["threshold"] = threshold
         print(f"Using neural threshold: {threshold}")
 
-    # Initialize SLDisaggregationSystem
-    print("\nInitializing SLDisaggregationSystem...")
-    generator = SLDisaggregationSystem(
+    # Initialize DynamicSimpleSGLangSelector
+    print("\nInitializing DynamicSimpleSGLangSelector...")
+    generator = DynamicSimpleSGLangSelector(
         model_config=model_config,
         device="cuda",
         dtype=torch.bfloat16,
         switching_strategy="neural",
         strategy_kwargs=strategy_kwargs,
-        is_record=True,
-        quick_sglang_kwargs=quick_sglang_kwargs,
-        reference_sglang_kwargs=reference_sglang_kwargs,
-        overlap_tp_schedule=args.overlap_tp_schedule,
+        is_record=args.record_generation,
+        sglang_kwargs=sglang_kwargs,
     )
     print("Generator initialized.\n")
 
@@ -163,7 +173,8 @@ def main():
             temperature=args.temperature,
             top_p=args.top_p,
             top_k=args.top_k,
-            display_progress=False,
+            record_generation=False,
+            print_tokens=False,
         )
         
         torch.cuda.synchronize()
@@ -180,10 +191,8 @@ def main():
     benchmark_times = []
     benchmark_output_tokens = []
     benchmark_throughputs = []
-    all_slm_counts = []
-    all_llm_counts = []
-    all_llm_ratios = []
-    last_output_text = ""
+    all_quick_ratios = []
+    all_reference_ratios = []
     
     for i in range(benchmark_iterations):
         print(f"\nBenchmark iteration {i + 1}/{benchmark_iterations}...")
@@ -191,13 +200,14 @@ def main():
         
         start_time = time.perf_counter()
         
-        result = generator.generate(
+        generated_texts, recorders = generator.generate(
             batch_input_ids,
             max_new_tokens=args.decode_length,
             temperature=args.temperature,
             top_p=args.top_p,
             top_k=args.top_k,
-            display_progress=args.display_progress,
+            record_generation=args.record_generation,
+            print_tokens=args.print_tokens,
         )
         
         torch.cuda.synchronize()
@@ -205,49 +215,43 @@ def main():
         
         iter_time = end_time - start_time
         benchmark_times.append(iter_time)
-
-        # Calculate output tokens and get generated text
-        obj = result[0]
-
-        if isinstance(obj, dict):
-            iter_output_tokens = len(obj.get("output_ids", []))
-            output_ids = obj.get("output_ids", [])
-            slm_token_count = obj.get("slm_token_count", 0)
-            llm_token_count = obj.get("llm_token_count", 0)
-            llm_ratio = obj.get("llm_ratio", 0.0)
-        else:
-            iter_output_tokens = len(obj.output_ids)
-            output_ids = obj.output_ids
-            slm_token_count = getattr(obj, "slm_token_count", 0)
-            llm_token_count = getattr(obj, "llm_token_count", 0)
-            total = slm_token_count + llm_token_count
-            llm_ratio = llm_token_count / total if total > 0 else 0.0
         
+        # Calculate output tokens
+        output_text = generated_texts[0]
+        iter_output_tokens = len(generator.tokenizer.encode(output_text))
         benchmark_output_tokens.append(iter_output_tokens)
-        all_slm_counts.append(slm_token_count)
-        all_llm_counts.append(llm_token_count)
-        all_llm_ratios.append(llm_ratio)
         
         # Calculate throughput
         iter_throughput = iter_output_tokens / iter_time if iter_time > 0 else 0
         benchmark_throughputs.append(iter_throughput)
         
-        # Decode output text (keep last one for CSV)
-        last_output_text = generator.tokenizer.decode(output_ids, skip_special_tokens=True)
+        # Calculate quick/reference ratio
+        quick_ratio = 0.0
+        reference_ratio = 0.0
+        if args.record_generation and recorders:
+            recorder = recorders[0]
+            if hasattr(recorder, 'records') and recorder.records:
+                quick_count = sum(1 for r in recorder.records if r.source_model == "quick")
+                reference_count = sum(1 for r in recorder.records if r.source_model == "reference")
+                total = len(recorder.records)
+                quick_ratio = quick_count / total if total > 0 else 0
+                reference_ratio = reference_count / total if total > 0 else 0
         
-        print(f"  Time: {iter_time:.3f}s, Tokens: {iter_output_tokens}, Throughput: {iter_throughput:.2f} tokens/s, LLM Ratio: {llm_ratio:.2%}")
+        all_quick_ratios.append(quick_ratio)
+        all_reference_ratios.append(reference_ratio)
+        
+        print(f"  Time: {iter_time:.3f}s, Tokens: {iter_output_tokens}, Throughput: {iter_throughput:.2f} tokens/s")
 
     # Calculate averages
     avg_time = sum(benchmark_times) / len(benchmark_times)
     avg_output_tokens = sum(benchmark_output_tokens) / len(benchmark_output_tokens)
     avg_throughput = sum(benchmark_throughputs) / len(benchmark_throughputs)
-    avg_slm_count = sum(all_slm_counts) / len(all_slm_counts)
-    avg_llm_count = sum(all_llm_counts) / len(all_llm_counts)
-    avg_llm_ratio = sum(all_llm_ratios) / len(all_llm_ratios)
+    avg_quick_ratio = sum(all_quick_ratios) / len(all_quick_ratios) if all_quick_ratios else 0
+    avg_reference_ratio = sum(all_reference_ratios) / len(all_reference_ratios) if all_reference_ratios else 0
 
     # Print results
     print("\n" + "=" * 60)
-    print("PERFORMANCE RESULTS - SLDisaggregationSystem")
+    print("PERFORMANCE RESULTS - DynamicSimpleSGLangSelector")
     print(f"(Average of {benchmark_iterations} benchmark runs after {warmup_iterations} warm-up runs)")
     print("=" * 60)
     print(f"Average Total Time: {avg_time:.3f} seconds")
@@ -257,50 +261,51 @@ def main():
     print(f"")
     print(f"Average Decode Throughput: {avg_throughput:.2f} tokens/s")
     print("=" * 60)
-    print("LLM CALL STATISTICS (Average)")
-    print("=" * 60)
-    print(f"Average SLM (Quick Model) Tokens: {avg_slm_count:.1f}")
-    print(f"Average LLM (Reference Model) Tokens: {avg_llm_count:.1f}")
-    print(f"Average LLM Call Ratio: {avg_llm_ratio:.2%}")
-    print(f"Average SLM Call Ratio: {1 - avg_llm_ratio:.2%}")
-    print("=" * 60)
     print(f"Individual runs: {[f'{t:.2f}s' for t in benchmark_times]}")
     print(f"Throughputs: {[f'{t:.2f}' for t in benchmark_throughputs]} tokens/s")
     print("=" * 60)
 
-    # Use average values for CSV output
+    # Print recorder statistics if available
+    if args.record_generation:
+        print(f"\n=== Generation Records (Average) ===")
+        print(f"Quick: {avg_quick_ratio*100:.1f}%")
+        print(f"Reference: {avg_reference_ratio*100:.1f}%")
+    
+    # Use last iteration values for CSV output
     total_time = avg_time
     output_tokens = int(avg_output_tokens)
     decode_tokens_per_sec = avg_throughput
-    llm_ratio = avg_llm_ratio
-    output_text = last_output_text
+    quick_ratio = avg_quick_ratio
+    reference_ratio = avg_reference_ratio
 
     # Save results to CSV if specified
     if args.output_csv:
         results = {
             'timestamp': datetime.now().isoformat(),
-            'system': 'SLDisaggregationSystem',
+            'system': 'DynamicSimpleSGLangSelector',
             'config_path': args.config_path,
             'threshold': threshold,
             'input_tokens': input_length,
             'output_tokens': output_tokens,
             'total_time_s': round(total_time, 3),
             'decode_throughput_tps': round(decode_tokens_per_sec, 2),
-            'quick_ratio': round(1 - llm_ratio, 4),
-            'reference_ratio': round(llm_ratio, 4),
+            'quick_ratio': round(quick_ratio, 4) if args.record_generation else None,
+            'reference_ratio': round(reference_ratio, 4) if args.record_generation else None,
             'prompt': prompt,
             'generated_text': output_text,
         }
         save_results_to_csv(args.output_csv, results)
 
-    print("\nTest complete.")
+    # Shutdown generator
+    generator.shutdown()
+    print("\nGenerator shutdown complete.")
 
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
         pass
     else:
-        print("WARNING: CUDA not available. SGLang dynamic mode will likely fail.")
+        print("WARNING: CUDA not available. DynamicSimpleSGLangSelector will likely fail.")
 
     mp.set_start_method("spawn", force=True)
     main()

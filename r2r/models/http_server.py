@@ -1,5 +1,6 @@
 import os
 os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
+os.environ["SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "1"
 
 import argparse
 import json
