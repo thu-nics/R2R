@@ -237,7 +237,7 @@ class SLMServer:
             tp_rank=rank,
             dp_rank=0,
             moe_ep_rank=0,
-            pp_rank=0,
+            pp_rank=0, # Pipeline parallelism is not Supported
             llm_kvcache_size=llm_kvcache_size,
         )
         # Setup system SUB socket on rank 0
@@ -294,7 +294,6 @@ class SLMServer:
         pbar_dict = {}
 
         try:
-            idle_loops = 0
             while True:
                 if inbound_queue is not None: # Process message from LLM
                     device = scheduler.batch_not_need.device
@@ -313,7 +312,6 @@ class SLMServer:
 
                 batch = scheduler.get_next_batch_to_run()
                 if batch:
-                    idle_loops = 0
                     result = scheduler.run_batch(batch)
                     if rank == 0:
                         # Refresh reasoning progress bars
@@ -383,9 +381,6 @@ class SLMServer:
                     else:
                         SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank)
                         scheduler.last_batch=batch
-                else:
-                    idle_loops += 1
-                    time.sleep(0.001)
         finally:
             try:
                 if dist.is_initialized():
@@ -614,7 +609,7 @@ class SLMServer:
             else:
                 recv_reqs = None
         else:
-            pass
+            raise RuntimeError("Pipeline parallelism is not supported.")
 
         if scheduler.server_args.enable_dp_attention:
             if scheduler.attn_tp_rank == 0:
