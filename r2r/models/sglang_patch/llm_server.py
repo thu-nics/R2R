@@ -174,7 +174,7 @@ class LLMServer:
             tp_rank=rank,
             dp_rank=0,
             moe_ep_rank=0,
-            pp_rank=0,
+            pp_rank=0, # Pipeline parallelism is not Supported
             llm_kvcache_size=llm_kvcache_size,
         )
         print(f"[reference rank {rank}] attn_tp_rank: {scheduler.attn_tp_rank}")
@@ -208,7 +208,6 @@ class LLMServer:
         print(f"Reference model worker {rank} started, waiting for requests...")
         
         try:
-            idle_loops = 0
             while True:
                 if inbound_queue is not None: # Process message from LLM
                     device = scheduler.batch_not_need.device
@@ -231,13 +230,9 @@ class LLMServer:
                 # For LLM, there is no need to process new reqs from rank_queue
                 batch = scheduler.get_next_batch_to_run()
                 if batch:
-                    idle_loops = 0
                     result = scheduler.run_batch(batch)
                     LLMServer.process_batch_results(rank, batch, result, scheduler, outbound_queue)
                     scheduler.last_batch = batch
-                else:
-                    idle_loops += 1
-                    time.sleep(0.001)
                 try:
                     if os.getppid() == 1:
                         print(f"[rank {rank}] parent process disappeared, exiting worker.")
@@ -333,7 +328,7 @@ class LLMServer:
             else:
                 recv_reqs = None
         else:
-            pass
+            raise RuntimeError("Pipeline parallelism is not supported.")
 
         if scheduler.server_args.enable_dp_attention:
             if scheduler.attn_tp_rank == 0:
