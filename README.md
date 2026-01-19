@@ -8,7 +8,7 @@
   <p>
     <a href="https://fuvty.github.io/R2R_Project_Page/">🌐 <b>Project Page</b></a> •
     <a href="https://arxiv.org/abs/2505.21600">📑 <b>arXiv</b></a> •
-    <a href="https://huggingface.co/papers/2505.21600">🤗 <b>HuggingFace</b></a>
+    <a href="https://huggingface.co/collections/nics-efc/r2r">🤗 <b>HuggingFace</b></a>
   </p>
 
 </div>
@@ -94,7 +94,7 @@ hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0
 python script/inference/launch_r2r_server.py --config-folder resource/Qwen3-0.6B+Qwen3-8B
 ```
 
-3. Send requests with Open-AI compatible API
+3. Send requests with Open-AI compatible API. For example, as in `test_http_openai_chat_completion.py`.
 
 ## 📚 Usage
 
@@ -137,9 +137,12 @@ To train a custom R2R router for any LLM-SLM pair, you need to:
 
 > 💡 Remember to edit `r2r/utils/model_configs.json` according to your training setup before running the following steps.
 
+<details>
+<summary>Click to see detailed training instructions</summary>
+
 #### 3.1 Dataset Preparation
 
-We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow these steps to create your own dataset.
+We provide a complete data generation pipeline in `script/data_labeling/`. You can either use our pre-generated training dataset from [Hugging Face](https://huggingface.co/datasets/nics-efc/R2R_Router_Training/tree/main) and skip to section 3.2, or follow the steps below to create your own dataset.
 
 ##### Initialize Dataset Conversion
 
@@ -231,6 +234,66 @@ The training script accepts the config file that specifies model architecture, d
 
 >We also provide a recipe for the Qwen3 series. To use it, simply replace r2r/utils/model_configs.json with model_configs_Qwen3_series.json, and update args.test_model_list to use the corresponding small model as described in Step 1.
 
+</details>
+
+## 🔗 Pretrained routers
+
+| Small Language Model | Large Language Model | Router Link |
+|-----|-----|-------------|
+| DeepSeek-R1-Distill-Qwen-1.5B | DeepSeek-R1-Distill-Qwen-32B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/DeepSeek-R1-Distill-Qwen-1.5B%2BDeepSeek-R1-Distill-Qwen-1.5B-32B) |
+| Qwen3-0.6B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-8B) |
+| Qwen3-0.6B | Qwen3-30B-A3B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-30B-A3B) |
+| Qwen3-0.6B | Qwen3-32B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-0.6B%2BQwen3-32B) |
+| Qwen3-1.7B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-1.7B%2BQwen3-8B) |
+| Qwen3-4B | Qwen3-8B | [🔗 Link](https://huggingface.co/nics-efc/R2R_router_collections/tree/main/Qwen3-4B%2BQwen-8B) |
+
+
 ## 🙌 Happy to help
 
 If you have questions about any aspect of R2R, please open an issue. We're happy to help and discuss!
+
+## 🌟 Related Projects
+
+Explore more efficient LLM projects from us:
+
+<table style="border: none; border-collapse: collapse;" align="center">
+<tr>
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
+<a href="https://github.com/thu-nics/TaH">
+<img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
+</a>
+</div>
+<a href="https://github.com/thu-nics/TaH"><b>TaH</b></a>
+<br/><sub>Selective latent thinking for reasoning LLMs</sub>
+</td>
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
+<a href="https://github.com/thu-nics/C2C">
+<img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
+</a>
+</div>
+<a href="https://github.com/thu-nics/C2C"><b>C2C</b></a>
+<br/><sub>Communicate through KV-Cache between LLMs</sub>
+</td>
+<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
+<a href="https://github.com/thu-nics/FrameFusion">
+<img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
+</a>
+</div>
+<a href="https://github.com/thu-nics/FrameFusion"><b>FrF</b></a>
+<br/><sub>Efficient video token reduction for LVLMs</sub>
+</td>
+<td align="center" valign="top" width="25%" style="border: none; padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
+<a href="https://github.com/thu-nics/MoA">
+<img src="https://raw.githubusercontent.com/thu-nics/MoA/master/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
+</a>
+</div>
+<a href="https://github.com/thu-nics/MoA"><b>MoA</b></a>
+<br/><sub>Mixture of sparse attention for LLMs</sub>
+</td>
+</tr>
+</table>
+
