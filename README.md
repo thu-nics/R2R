@@ -88,21 +88,37 @@ R2R is fully compatible with SGLang chat completion API. Simply:
 1. Launch the server.
 
 ```bash
-python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml
+python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml --port 30000
 ```
 
-2. Send requests with Open-AI compatible API. For example, as in `test_http_openai_chat_completion.py`.
+2. Send requests with any Open-AI compatible API. 
+
+```python
+import requests
+
+url = f"http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "default",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
 
 <details>
-<summary>Download router to custom directory</summary>
+<summary>Custom download and OpenAI client</summary>
 
-To download existing R2R router checkpoints, like Qwen3-0.6B with Qwen3-8B, use
+1. To download existing R2R router checkpoints, like Qwen3-0.6B with Qwen3-8B, use
 
 ```bash
 hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0.6B+Qwen3-8B/**" --local-dir resource
 ```
 
 See [Pretrained routers](#-pretrained-routers) for the full list of supported models.
+
+2. To use other request methods, like OpenAI client, see examples in `test/test_http_openai_client.py` and `test/test_http_openai_chat_completion.py`.
 
 </details>
 

@@ -48,7 +48,10 @@ dev = [
     "PyYAML",
     "uvicorn",
     "openai",
-    "requests"
+    "requests",
+    "aiohttp",
+    "tiktoken",
+    "rich"
 ]
 
 [tool.setuptools.packages.find]
