@@ -43,13 +43,84 @@ class ModelSwitchingStrategy:
         raise NotImplementedError
 
 class ImmediateSwitching(ModelSwitchingStrategy):
-    """Simple immediate switching based on threshold"""
-    def route(self, outputs) -> str:
-        next_token_logits = outputs.logits[:, -1, :]
-        aleatoric_uncertainty, _ = compute_logu(next_token_logits)
-        model_choice = 'quick' if aleatoric_uncertainty < self.aleatoric_threshold else 'reference'
-        self.state.last_model = model_choice
-        return model_choice
+    
+    def __init__(
+        self, model_path, aleatoric_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
+    ):
+        """Simple immediate switching based on aleatoric threshold"""
+        super().__init__()  # Initialize parent class to set up self.state
+        
+        # Use aleatoric_threshold if provided, otherwise default
+        if aleatoric_threshold is not None:
+            self.threshold = float(aleatoric_threshold)
+        else:
+            self.threshold = 2.275 
+        print(f"Using aleatoric threshold: {self.threshold}")
+    
+    def route(self, outputs) -> torch.Tensor:
+        """
+        Determine which model to use for each input in the batch.
+        Args:
+            outputs: Model outputs from the quick model
+        Returns:
+            torch.Tensor: Binary tensor of shape [batch_size] where:
+                0 = use quick model
+                1 = use reference model
+        """
+        batch_size = outputs.logits.shape[0]
+        next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
+        
+        # Compute uncertainty for each sample in the batch
+        model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
+        
+        for i in range(batch_size):
+            aleatoric_uncertainty, _ = compute_logu(next_token_logits[i:i+1])
+            # 0 = quick (low uncertainty), 1 = reference (high uncertainty)
+            model_choices[i] = 0 if aleatoric_uncertainty < self.threshold else 1
+        
+        # Update state based on batch decisions
+        self.state.last_model = "reference" if model_choices.any().item() else "quick"
+        return model_choices
+
+class EntropySwitching(ModelSwitchingStrategy):
+    
+    def __init__(
+        self, model_path, entropy_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
+    ):
+        """Simple immediate switching based on entropy threshold"""
+        super().__init__()  # Initialize parent class to set up self.state
+        
+        # Use entropy_threshold if provided, otherwise default
+        if entropy_threshold is not None:
+            self.threshold = float(entropy_threshold)
+        else:
+            self.threshold = 0.45  # Default entropy threshold
+        print(f"Using entropy threshold: {self.threshold}")
+    
+    def route(self, outputs) -> torch.Tensor:
+        """
+        Determine which model to use for each input in the batch.
+        Args:
+            outputs: Model outputs from the quick model
+        Returns:
+            torch.Tensor: Binary tensor of shape [batch_size] where:
+                0 = use quick model
+                1 = use reference model
+        """
+        batch_size = outputs.logits.shape[0]
+        next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
+        
+        # Compute entropy for each sample in the batch
+        model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
+        
+        for i in range(batch_size):
+            entropy = compute_entropy(next_token_logits[i:i+1])
+            # 0 = quick (low entropy), 1 = reference (high entropy)
+            model_choices[i] = 0 if entropy < self.threshold else 1
+        
+        # Update state based on batch decisions
+        self.state.last_model = "reference" if model_choices.any().item() else "quick"
+        return model_choices
 
 class MomentumSwitching(ModelSwitchingStrategy):
     """Momentum-based switching with asymmetric behavior"""
@@ -63,22 +134,37 @@ class MomentumSwitching(ModelSwitchingStrategy):
         self.ref_to_quick_threshold = ref_to_quick_threshold
         self.state.momentum = 0.0
     
-    def route(self, outputs) -> str:
-        next_token_logits = outputs.logits[:, -1, :]
-        aleatoric_uncertainty, _ = compute_logu(next_token_logits)
-        is_simple = aleatoric_uncertainty < self.aleatoric_threshold
+    def route(self, outputs) -> torch.Tensor:
+        """
+        Determine which model to use for each input in the batch.
+        Args:
+            outputs: Model outputs from the quick model
+        Returns:
+            torch.Tensor: Binary tensor of shape [batch_size] where:
+                0 = use quick model
+                1 = use reference model
+        """
+        batch_size = outputs.logits.shape[0]
+        next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
+        model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
         
-        # Update momentum based on current token
-        self.state.momentum = (self.momentum_factor * self.state.momentum + 
-                             (1 - self.momentum_factor) * (1.0 if is_simple else 0.0))
+        for i in range(batch_size):
+            aleatoric_uncertainty, _ = compute_logu(next_token_logits[i:i+1])
+            is_simple = aleatoric_uncertainty < self.aleatoric_threshold
+            
+            # Update momentum based on current token
+            self.state.momentum = (self.momentum_factor * self.state.momentum + 
+                                 (1 - self.momentum_factor) * (1.0 if is_simple else 0.0))
+            
+            if self.state.last_model == 'quick':
+                use_reference = self.state.momentum <= self.quick_to_ref_threshold
+            else:
+                use_reference = self.state.momentum <= self.ref_to_quick_threshold
+            
+            model_choices[i] = 1 if use_reference else 0
+            self.state.last_model = 'reference' if use_reference else 'quick'
         
-        if self.state.last_model == 'quick':
-            model_choice = 'quick' if self.state.momentum > self.quick_to_ref_threshold else 'reference'
-        else:
-            model_choice = 'quick' if self.state.momentum > self.ref_to_quick_threshold else 'reference'
-        
-        self.state.last_model = model_choice
-        return model_choice
+        return model_choices
 
 class SingleRollingWindowSwitching(ModelSwitchingStrategy):
     """Rolling window-based switching with asymmetric behavior"""
@@ -94,32 +180,48 @@ class SingleRollingWindowSwitching(ModelSwitchingStrategy):
         self.required_simple_ratio = required_simple_ratio
         self.state.aleatoric_history = deque(maxlen=window_size)
     
-    def route(self, outputs) -> str:
-        next_token_logits = outputs.logits[:, -1, :]
-        aleatoric_uncertainty, epistemic_uncertainty = compute_logu(next_token_logits)
-        entropy = compute_entropy(next_token_logits)
+    def route(self, outputs) -> torch.Tensor:
+        """
+        Determine which model to use for each input in the batch.
+        Args:
+            outputs: Model outputs from the quick model
+        Returns:
+            torch.Tensor: Binary tensor of shape [batch_size] where:
+                0 = use quick model
+                1 = use reference model
+        """
+        batch_size = outputs.logits.shape[0]
+        next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
+        model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
         
-        is_simple = aleatoric_uncertainty < self.aleatoric_threshold or entropy < self.entropy_threshold
-        if self.state.last_model == 'quick':
-            model_choice = 'quick' if is_simple else 'reference'
-            if model_choice == 'reference':
-                self.state.aleatoric_history.clear()
-                self.state.aleatoric_history.append(aleatoric_uncertainty)
-        else:
-            # Reference model: record history and check average uncertainty
-            self.state.aleatoric_history.append(aleatoric_uncertainty)
-            if len(self.state.aleatoric_history) == 0:
-                model_choice = 'reference'
-            else:
-                avg_uncertainty = sum(self.state.aleatoric_history) / len(self.state.aleatoric_history)
-                model_choice = 'quick' if avg_uncertainty < self.aleatoric_threshold else 'reference'
+        for i in range(batch_size):
+            aleatoric_uncertainty, epistemic_uncertainty = compute_logu(next_token_logits[i:i+1])
+            entropy = compute_entropy(next_token_logits[i:i+1])
             
-            # Clear history when switching back to quick
-            if model_choice == 'quick':
-                self.state.aleatoric_history.clear()
+            is_simple = aleatoric_uncertainty < self.aleatoric_threshold or entropy < self.entropy_threshold
+            
+            if self.state.last_model == 'quick':
+                use_reference = not is_simple
+                if use_reference:
+                    self.state.aleatoric_history.clear()
+                    self.state.aleatoric_history.append(aleatoric_uncertainty)
+            else:
+                # Reference model: record history and check average uncertainty
+                self.state.aleatoric_history.append(aleatoric_uncertainty)
+                if len(self.state.aleatoric_history) == 0:
+                    use_reference = True
+                else:
+                    avg_uncertainty = sum(self.state.aleatoric_history) / len(self.state.aleatoric_history)
+                    use_reference = avg_uncertainty >= self.aleatoric_threshold
+                
+                # Clear history when switching back to quick
+                if not use_reference:
+                    self.state.aleatoric_history.clear()
+            
+            model_choices[i] = 1 if use_reference else 0
+            self.state.last_model = 'reference' if use_reference else 'quick'
         
-        self.state.last_model = model_choice
-        return model_choice
+        return model_choices
 
 class DuoRollingWindowSwitching(ModelSwitchingStrategy):
     """Rolling window-based switching with separate windows for quick and reference models"""
@@ -133,39 +235,54 @@ class DuoRollingWindowSwitching(ModelSwitchingStrategy):
         self.quick_history = deque(maxlen=window_size)
         self.reference_history = deque(maxlen=window_size)
 
-    def route(self, outputs) -> str:
-        next_token_logits = outputs.logits[:, -1, :]
-        aleatoric_uncertainty, _ = compute_logu(next_token_logits)
-        is_simple = aleatoric_uncertainty < self.aleatoric_threshold
+    def route(self, outputs) -> torch.Tensor:
+        """
+        Determine which model to use for each input in the batch.
+        Args:
+            outputs: Model outputs from the quick model
+        Returns:
+            torch.Tensor: Binary tensor of shape [batch_size] where:
+                0 = use quick model
+                1 = use reference model
+        """
+        batch_size = outputs.logits.shape[0]
+        next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
+        model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
+        
+        for i in range(batch_size):
+            aleatoric_uncertainty, _ = compute_logu(next_token_logits[i:i+1])
+            is_simple = aleatoric_uncertainty < self.aleatoric_threshold
 
-        # Always record uncertainty in the current model's window
-        if self.state.last_model == 'quick':
-            self.quick_history.append(aleatoric_uncertainty)
+            # Always record uncertainty in the current model's window
+            if self.state.last_model == 'quick':
+                self.quick_history.append(aleatoric_uncertainty)
 
-            # If current token is complex, switch to reference immediately
-            if not is_simple:
-                self.reference_history.clear()  # Clear reference history when switching
-                model_choice = 'reference'
-            else:
-                # Stay with quick model
-                model_choice = 'quick'
-        else:  # In reference model
-            self.reference_history.append(aleatoric_uncertainty)
-
-            # Only consider switching to quick if we have enough history
-            if len(self.reference_history) > 0:
-                # Check average uncertainty in reference window
-                ref_avg = sum(self.reference_history) / len(self.reference_history)
-                if ref_avg < self.aleatoric_threshold:
-                    self.quick_history.clear()  # Clear quick history when switching
-                    model_choice = 'quick'
+                # If current token is complex, switch to reference immediately
+                if not is_simple:
+                    self.reference_history.clear()  # Clear reference history when switching
+                    use_reference = True
                 else:
-                    model_choice = 'reference'
-            else:
-                model_choice = 'reference'
+                    # Stay with quick model
+                    use_reference = False
+            else:  # In reference model
+                self.reference_history.append(aleatoric_uncertainty)
 
-        self.state.last_model = model_choice
-        return model_choice
+                # Only consider switching to quick if we have enough history
+                if len(self.reference_history) > 0:
+                    # Check average uncertainty in reference window
+                    ref_avg = sum(self.reference_history) / len(self.reference_history)
+                    if ref_avg < self.aleatoric_threshold:
+                        self.quick_history.clear()  # Clear quick history when switching
+                        use_reference = False
+                    else:
+                        use_reference = True
+                else:
+                    use_reference = True
+
+            model_choices[i] = 1 if use_reference else 0
+            self.state.last_model = 'reference' if use_reference else 'quick'
+        
+        return model_choices
 
 
 class NeuralSwitching(ModelSwitchingStrategy):
@@ -679,6 +796,7 @@ def create_switching_strategy(strategy_name: str, **kwargs) -> ModelSwitchingStr
     """Factory function to create switching strategy instances"""
     strategies = {
         'immediate': ImmediateSwitching,
+        'entropy': EntropySwitching,
         'momentum': MomentumSwitching,
         'rolling': SingleRollingWindowSwitching,
         'duo_rolling': DuoRollingWindowSwitching,

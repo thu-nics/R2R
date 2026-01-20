@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("--tp-size-quick", type=int, default=1)
     parser.add_argument("--tp-size-ref", type=int, default=1)
     parser.add_argument("--overlap-tp-schedule", action="store_true", default=False)
-    parser.add_argument('--neural-threshold', type=float, default=0.5,
+    parser.add_argument('--threshold', type=float, default=0.5,
                         help='Threshold for the neural switching strategy (default: 0.5).')
 
     mp.set_start_method("spawn", force=True)

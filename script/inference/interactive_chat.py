@@ -168,11 +168,35 @@ def run_dynamic_sglang_mode(args, model_config: dict, router_config: dict):
     print(f"Running in Dynamic SGLang mode with classifier: {router_path}")
     print(f"Using TP size: {args.tp_size}")
 
+    # Determine switching strategy first
+    switching_strategy = router_config.get("switching_strategy")
+    if switching_strategy is None:
+        switching_strategy = "neural"
+    print(f"Using switching strategy: {switching_strategy}")
+
     strategy_kwargs = {
         'model_path': router_path
     }
-    if args.neural_threshold:
-        strategy_kwargs['threshold'] = args.neural_threshold
+
+    # Threshold loading logic
+    if switching_strategy == "neural":
+        # Priority: config file's router.threshold > command line arg
+        threshold = router_config.get("threshold")
+        if threshold is None and args.threshold is not None:
+            threshold = args.threshold
+        
+        if threshold is not None:
+            strategy_kwargs["threshold"] = threshold
+            print(f"Using neural threshold: {threshold}")
+    else:
+        # For non-neural strategies, use specific thresholds from config
+        if "aleatoric_threshold" in router_config:
+            strategy_kwargs["aleatoric_threshold"] = router_config["aleatoric_threshold"]
+            print(f"Using aleatoric threshold from config: {router_config['aleatoric_threshold']}")
+        
+        if "entropy_threshold" in router_config:
+            strategy_kwargs["entropy_threshold"] = router_config["entropy_threshold"]
+            print(f"Using entropy threshold from config: {router_config['entropy_threshold']}")
 
     ref_model_path = model_config['reference']['model_path']
     qck_model_path = model_config['quick']['model_path']
@@ -193,7 +217,7 @@ def run_dynamic_sglang_mode(args, model_config: dict, router_config: dict):
         model_config=model_config,
         device="cuda",
         dtype=torch.bfloat16,
-        switching_strategy='neural',
+        switching_strategy=switching_strategy,
         strategy_kwargs=strategy_kwargs,
         is_record=False,
         sglang_kwargs=sglang_kwargs
