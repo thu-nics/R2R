@@ -162,13 +162,22 @@ async def generate_request(obj: GenerateReqInput):
                 raise HTTPException(status_code=400, detail="Either text or input_ids must be provided")
             input_ids = system.tokenizer.encode(obj.text)
 
+        default_sampling_params = {
+            "max_new_tokens": 128,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "top_k": -1,
+        }
+        sampling_params = obj.sampling_params
+        if sampling_params is None:
+            sampling_params = default_sampling_params
         
         result = await system.generate_one_request(
             input_id=input_ids,
-            max_new_tokens=obj.sampling_params.get('max_new_tokens', 128),
-            temperature=obj.sampling_params.get('temperature', 1.0),
-            top_p=obj.sampling_params.get('top_p', 1.0),
-            top_k=obj.sampling_params.get('top_k', -1),
+            max_new_tokens=sampling_params.get('max_new_tokens', 128),
+            temperature=sampling_params.get('temperature', 1.0),
+            top_p=sampling_params.get('top_p', 1.0),
+            top_k=sampling_params.get('top_k', -1),
             display_progress=obj.display_progress
         )
         
@@ -217,13 +226,27 @@ async def chat_completions(request: ChatCompletionRequest):
         
         prompt_tokens = len(input_ids)
         
+        sampling_params = {
+            "temperature": 1.0,
+            "top_p":  1.0,
+            "top_k": -1,
+            "max_new_tokens": 2048,
+        }
+
+        if request.temperature is not None:
+            sampling_params["temperature"] = request.temperature
+        if request.top_p is not None:
+            sampling_params["top_p"] = request.top_p
+        if request.max_tokens is not None:
+            sampling_params["max_new_tokens"] = request.max_tokens
+
         # Generate response
         result = await system.generate_one_request(
             input_id=input_ids,
-            max_new_tokens=request.max_tokens or 2048,
-            temperature=request.temperature or 1.0,
-            top_p=request.top_p or 1.0,
-            top_k=-1,
+            max_new_tokens=sampling_params["max_new_tokens"],
+            temperature=sampling_params["temperature"],
+            top_p=sampling_params["top_p"],
+            top_k=sampling_params["top_k"],
             display_progress=False
         )
         
