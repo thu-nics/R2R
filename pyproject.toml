@@ -43,6 +43,13 @@ evaluate = [
     "psutil",
     "packaging"
 ]
+dev = [
+    "datasets>=2.20.0",
+    "PyYAML",
+    "uvicorn",
+    "openai",
+    "requests"
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

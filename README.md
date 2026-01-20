@@ -85,19 +85,26 @@ rm -rf ~/.triton/cache
 
 R2R is fully compatible with SGLang chat completion API. Simply:
 
-1. Download existing R2R router checkpoints. Like Qwen3-0.6B with Qwen3-8B:
+1. Launch the server.
+
+```bash
+python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml
+```
+
+2. Send requests with Open-AI compatible API. For example, as in `test_http_openai_chat_completion.py`.
+
+<details>
+<summary>Download router to custom directory</summary>
+
+To download existing R2R router checkpoints, like Qwen3-0.6B with Qwen3-8B, use
 
 ```bash
 hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0.6B+Qwen3-8B/**" --local-dir resource
 ```
 
-2. Launch the server.
+See [Pretrained routers](#-pretrained-routers) for the full list of supported models.
 
-```bash
-python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-8B.yaml
-```
-
-3. Send requests with Open-AI compatible API. For example, as in `test_http_openai_chat_completion.py`.
+</details>
 
 ## 📚 Usage
 
