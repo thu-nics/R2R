@@ -115,7 +115,7 @@ python script/inference/interactive_chat.py --config-path config/Qwen3-0.6B+Qwen
 The following script evaluates R2R's accuracy and speed on AIME24-25, GPQA-Diamond, or LiveCodeBench:
 
 ```bash
-python script/evaluate/hf_dataset_sglang.py --dataset aime --router_path resource/default_router.pt --use_hybrid
+python script/evaluate/hf_dataset_sglang.py --dataset aime --config-path config/Qwen3-0.6B+Qwen3-8B.yaml --use_hybrid 
 ```
 
 Detailed configurations for benchmark datasets and evaluation metrics are available in `script/evaluate/eval_configs/dataset_configs.json`. Moreover, our default router_path and threshold settings are provided through `script/evaluate/eval_configs/r2r_configs.json`.
