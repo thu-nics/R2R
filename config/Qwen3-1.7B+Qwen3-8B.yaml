@@ -45,4 +45,5 @@
     "override_init_args":{
       "pretrained_model_name": "Qwen/Qwen3-1.7B"
     }
+  }
 }
