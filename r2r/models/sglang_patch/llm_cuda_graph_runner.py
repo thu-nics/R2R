@@ -94,11 +94,12 @@ class LLMCudaGraphRunner(CudaGraphRunner):
         self.extend_num_tokens_per_bs = list(range(16, 0, -1))
         self.max_extend_num_tokens_per_bs = max(self.extend_num_tokens_per_bs)
         if model_runner.spec_algorithm.is_eagle():
-            if self.model_runner.is_draft_worker:
-                raise RuntimeError("This should not happen")
-            else:
-                self.capture_forward_mode = ForwardMode.TARGET_VERIFY
-                self.extend_num_tokens_per_bs = self.model_runner.server_args.speculative_num_draft_tokens
+            # if self.model_runner.is_draft_worker:
+            #     raise RuntimeError("This should not happen")
+            # else:
+            #     self.capture_forward_mode = ForwardMode.TARGET_VERIFY
+            #     self.extend_num_tokens_per_bs = self.model_runner.server_args.speculative_num_draft_tokens
+            raise NotImplementedError("Speculative decoding is not supported in LLMCudaGraphRunner.")
 
         # If returning hidden states is enabled, set initial capture hidden mode to full to avoid double-capture on startup
         if model_runner.server_args.enable_return_hidden_states:
