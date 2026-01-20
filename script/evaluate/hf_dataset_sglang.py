@@ -1,6 +1,7 @@
 import os
+import sys
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ.setdefault('MASTER_PORT', '29500')
+os.environ.setdefault('MASTER_PORT', '29506')
 os.environ['SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK'] = '1'
 import torch
 import transformers
@@ -14,6 +15,7 @@ from datetime import datetime
 import math
 from tqdm import tqdm
 import argparse
+import yaml
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 from r2r.evaluate.eval_utils import get_answer_extractor, check_answer_correctness
 from r2r.evaluate.eval_utils import QUERY_TEMPLATE_MULTICHOICE, ANSWER_PATTERN_MULTICHOICE
@@ -24,7 +26,7 @@ from sglang.srt.hf_transformers_utils import get_tokenizer
 from r2r.evaluate.eval_utils import select_by_category, generate_cot_prompt, preprocess
 import multiprocessing as mp
 import warnings
-from r2r.utils.config import TOKEN_TYPE, MODEL_DICT
+from r2r.utils.config import TOKEN_TYPE
 
 # set numpy random seed
 np.random.seed(42)
@@ -125,17 +127,17 @@ def parse_args():
                       help='Resume from last checkpoint, processing only failed or missing problems')
     
     # Hybrid model configuration
-    parser.add_argument('--switching_strategy', type=str, default='neural',
-                      help='Switching strategy for hybrid model')
+    parser.add_argument('--switching_strategy', type=str, default=None,
+                      help='Switching strategy for hybrid model (default: loaded from config, or "neural")')
     parser.add_argument('--is_record', action='store_true',
                       help='Record hybrid model generation')
     
     # Neural router configuration
-    parser.add_argument('--router_path', type=str, default='resource/default_router.pt',
-                      help='Path to the neural router model')
-    
     parser.add_argument('--threshold', type=float, default=None,
                       help='Threshold for neural router')
+    
+    parser.add_argument('--config-path', type=str, default=None,
+                        help='Path to config.yaml containing router config')
     
     parser.add_argument('--reference_prob', type=float, default=0.5,
                       help='Probability of selecting the reference model')
@@ -159,12 +161,27 @@ def parse_args():
 
     args.test_run_time = True
     
+    # Load config from folder if provided
+    model_config = None
+    if args.config_path:
+        config_path = args.config_path
+        if os.path.isdir(config_path):
+            config_path = os.path.join(config_path, "config.yaml")
+        with open(config_path, "r") as f:
+            model_config = yaml.safe_load(f)
+        print(f"Loaded config from {config_path}")
+    args.model_config = model_config
+
     if args.use_hybrid:
-        if args.model_path == MODEL_DICT['quick']['model_path']:
+        if model_config is None:
+            print("Error: --use_hybrid requires --config-path to be provided.")
+            sys.exit(1)
+        quick_model_path = model_config['quick']['model_path']
+        if args.model_path == quick_model_path:
             print(f"Using quick model: {args.model_path}")
         else:
-            print(f"model path does not match the quick model path: {args.model_path} and {MODEL_DICT['quick']['model_path']}, use quick model instead")
-            args.model_path = MODEL_DICT['quick']['model_path']
+            print(f"model path does not match the quick model path: {args.model_path} and {quick_model_path}, use quick model instead")
+            args.model_path = quick_model_path
         
     # Get dataset config
     dataset_config = DATASET_CONFIGS[args.dataset]
@@ -188,15 +205,6 @@ def parse_args():
     # Load router_path and threshold from r2r configs
     if args.dataset in R2R_CONFIGS:
         r2r_config = R2R_CONFIGS[args.dataset]
-        # Handle router_path
-        if 'router_path' in r2r_config:
-            if args.router_path != r2r_config['router_path']:
-                warnings.warn(
-                    f"Router path mismatch for dataset '{args.dataset}': "
-                    f"provided '{args.router_path}' but r2r config specifies '{r2r_config['router_path']}'"
-                )
-            else:
-                print(f"Using provided router_path (matches r2r config): {args.router_path}")
         # Handle threshold (only load if not provided)
         if args.threshold is None and 'threshold' in r2r_config:
             args.threshold = r2r_config['threshold']
@@ -225,7 +233,8 @@ def setup_device(args: argparse.Namespace, gpu_id: int, thread_id: int) -> Tuple
 def process_problems(
     args: argparse.Namespace, 
     problems: List[Dict], 
-    use_hybrid: bool
+    use_hybrid: bool,
+    model_config: Dict = None
 ):
     """Process a set of problems using either standard or hybrid model.
     
@@ -236,6 +245,7 @@ def process_problems(
         args: Command line arguments
         problems: List of problems to process
         use_hybrid: Whether to use hybrid model processing
+        model_config: Model configuration dictionary
         
     Returns:
         List of result dictionaries containing model outputs and metrics
@@ -256,7 +266,8 @@ def process_problems(
         answer_type=answer_type,
         answer_extractor=answer_extractor,
         dataset_config=dataset_config,
-        use_hybrid=use_hybrid
+        use_hybrid=use_hybrid,
+        model_config=model_config
     )
     
     # Add model metadata
@@ -279,7 +290,8 @@ def process_with_model(
     answer_type: str,
     answer_extractor: Callable,
     dataset_config: Dict,
-    use_hybrid: bool
+    use_hybrid: bool,
+    model_config: Dict = None
 ) -> List[Dict]:
     """Process problems using either standard or hybrid model.
     
@@ -292,6 +304,7 @@ def process_with_model(
         answer_extractor: Function to extract answers from model output
         dataset_config: Dataset-specific configuration
         use_hybrid: Whether to use hybrid model processing
+        model_config: Model configuration dictionary
     """
     generator = None
     kwargs_generation = dict()
@@ -299,43 +312,76 @@ def process_with_model(
     if use_hybrid:
         model = None
         # Prepare strategy kwargs based on the selected strategy
+        router_config = model_config.get("router", {}) if model_config else {}
         strategy_kwargs = {}
-        if args.switching_strategy == 'rolling':
+        
+        # Determine switching strategy, priority: config > command line
+        switching_strategy = router_config.get("switching_strategy")
+        if switching_strategy is None:
+            switching_strategy = args.switching_strategy
+        if switching_strategy is None:
+            switching_strategy = "neural"
+        
+        # Determine router path from config
+        router_path = router_config.get("router_path")
+        if router_path:
+            print(f"Using router path from config: {router_path}")
+        
+        if switching_strategy == 'rolling':
             strategy_kwargs.update({
-                'window_size': args.window_size,
-                'required_simple_ratio': args.required_simple_ratio
+                'window_size': args.window_size if hasattr(args, 'window_size') else 10,
+                'required_simple_ratio': args.required_simple_ratio if hasattr(args, 'required_simple_ratio') else 0.5
             })
-        elif args.switching_strategy == 'random':
+        elif switching_strategy == 'random':
             strategy_kwargs.update({
                 'reference_prob': args.reference_prob,
             })
-        elif args.switching_strategy == 'momentum':
+        elif switching_strategy == 'momentum':
             strategy_kwargs.update({
-                'momentum_factor': args.momentum_factor,
-                'quick_to_ref_threshold': args.quick_to_ref_threshold,
-                'ref_to_quick_threshold': args.ref_to_quick_threshold
+                'momentum_factor': args.momentum_factor if hasattr(args, 'momentum_factor') else 0.9,
+                'quick_to_ref_threshold': args.quick_to_ref_threshold if hasattr(args, 'quick_to_ref_threshold') else 0.5,
+                'ref_to_quick_threshold': args.ref_to_quick_threshold if hasattr(args, 'ref_to_quick_threshold') else 0.5
             })
-        elif args.switching_strategy == 'neural':
+        elif switching_strategy == 'neural':
             strategy_kwargs.update({
-                'model_path': args.router_path,
+                'model_path': router_path,
             })
-            if args.threshold is not None:
-                strategy_kwargs.update({
-                    'threshold': args.threshold,
-                })
-        elif args.switching_strategy == 'neural_rolling':
+            # Priority: config file's router.threshold > command line arg
+            threshold = router_config.get("threshold")
+            if threshold is None:
+                threshold = args.threshold
+            
+            if threshold is not None:
+                strategy_kwargs["threshold"] = threshold
+        elif switching_strategy == 'neural_rolling':
             strategy_kwargs.update({
-                'model_path': args.router_path,
-                # 'threshold': 0.5,
-                'window_size': args.window_size,
-                'required_simple_ratio': args.required_simple_ratio,
+                'model_path': router_path,
+                'window_size': args.window_size if hasattr(args, 'window_size') else 10,
+                'required_simple_ratio': args.required_simple_ratio if hasattr(args, 'required_simple_ratio') else 0.5,
             })
-        elif args.switching_strategy == 'neural_multi_input':
+        elif switching_strategy == 'neural_multi_input':
             strategy_kwargs.update({
-                'model_path': args.router_path,
-                'threshold': 0.5,
-                'neural_window_size': args.neural_window_size,
+                'model_path': router_path,
+                'threshold': router_config.get("threshold", 0.5) if args.threshold is None else args.threshold,
+                'neural_window_size': args.neural_window_size if hasattr(args, 'neural_window_size') else 5,
             })
+        elif switching_strategy == 'entropy':
+            strategy_kwargs.update({
+                'model_path': router_path,
+                'entropy_threshold': router_config.get("entropy_threshold", args.threshold)
+            })
+        elif switching_strategy == 'immediate':
+            strategy_kwargs.update({
+                'model_path': router_path,
+                'aleatoric_threshold': router_config.get("aleatoric_threshold", args.threshold)
+            })
+        else:
+            # For other strategies, possibly non-neural, check for specific thresholds in config
+            if "aleatoric_threshold" in router_config:
+                strategy_kwargs["aleatoric_threshold"] = router_config["aleatoric_threshold"]
+            if "entropy_threshold" in router_config:
+                strategy_kwargs["entropy_threshold"] = router_config["entropy_threshold"]
+
         # initialize generator
         kwargs_init = dict()
         kwargs_generation = dict()
@@ -351,10 +397,12 @@ def process_with_model(
             print(f"Using {args.tp_size} GPUs for SGLang")
         else:
             raise ValueError(f"Invalid generator: {args.generator}")
+        
         generator = generator_class(
+            model_config=model_config,
             device="cuda",
             dtype=torch.bfloat16,
-            switching_strategy=args.switching_strategy,
+            switching_strategy=switching_strategy,
             strategy_kwargs=strategy_kwargs,
             is_record=args.is_record,
             **kwargs_init
@@ -1041,9 +1089,16 @@ def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     
+    model_config = args.model_config
+
     # Save args to JSON
     with open(os.path.join(args.output_dir, 'args.json'), 'w') as f:
         json.dump(vars(args), f, indent=2)
+    
+    # Save model_config to JSON
+    if model_config:
+        with open(os.path.join(args.output_dir, 'model_config.json'), 'w') as f:
+            json.dump(model_config, f, indent=2)
     
     # Load and preprocess dataset
     print(f"Loading dataset: {args.dataset} from {args.dataset_path}")
@@ -1146,7 +1201,7 @@ def main():
                 print(f"Resuming with {len(job_problems)} remaining problems")
             
             # Process problems for this job
-            results = process_problems(args, job_problems, args.use_hybrid)
+            results = process_problems(args, job_problems, args.use_hybrid, model_config=args.model_config)
             
             # Process results for this job
             newly_completed = get_completed_problems(args.output_dir)
@@ -1161,7 +1216,7 @@ def main():
                 print(f"Remaining problems: {len(remaining)}")
                 
     else:
-        results = process_problems(args, problems, args.use_hybrid)
+        results = process_problems(args, problems, args.use_hybrid, model_config=args.model_config)
         # Process results
         newly_completed = get_completed_problems(args.output_dir)
         completed_problems.update(newly_completed)

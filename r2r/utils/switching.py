@@ -45,7 +45,7 @@ class ModelSwitchingStrategy:
 class ImmediateSwitching(ModelSwitchingStrategy):
     
     def __init__(
-        self, model_path, aleatoric_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
+        self, model_path: Optional[str] = None, aleatoric_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
     ):
         """Simple immediate switching based on aleatoric threshold"""
         super().__init__()  # Initialize parent class to set up self.state
@@ -85,7 +85,7 @@ class ImmediateSwitching(ModelSwitchingStrategy):
 class EntropySwitching(ModelSwitchingStrategy):
     
     def __init__(
-        self, model_path, entropy_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
+        self, model_path: Optional[str] = None, entropy_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
     ):
         """Simple immediate switching based on entropy threshold"""
         super().__init__()  # Initialize parent class to set up self.state
