@@ -31,6 +31,9 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 ⭐ **Feel free to star this repo or cite our paper if you find it useful!**
 
 ## 📰 News
+
+* [2026/01] `v0.1` release! Major system update to support online serving with OpenAI-compatible API. Support batch inference, CUDA graph, and much more, with a cleaner interface.
+
 * [2025/10] Added support for the Qwen3 model family. Router checkpoints are now available [here](https://huggingface.co/nics-efc/R2R_router_collections).
 
 * [2025/09] Accepted by the NeurIPS'25 conference.
