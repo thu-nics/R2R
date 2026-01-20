@@ -91,7 +91,7 @@ hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0
 2. Launch the server.
 
 ```bash
-python script/inference/launch_r2r_server.py --config-folder resource/Qwen3-0.6B+Qwen3-8B
+python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-8B.yaml
 ```
 
 3. Send requests with Open-AI compatible API. For example, as in `test_http_openai_chat_completion.py`.
@@ -105,10 +105,10 @@ We provide an interactive example in `interactive_chat.py`. The main `DynamicSim
 You can download the pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main) and place the file `default_router.pt` under `resource/` folder:
 
 ```bash
-python script/playground/interactive_chat.py --router_path resource/default_router.pt
+python script/inference/interactive_chat.py --config-path config/Qwen3-0.6B+Qwen3-8B.yaml
 ```
 
-> The detailed model configurations are in `r2r/utils/config.py`.
+> The detailed model configurations are in `config` folder.
 
 ### 2. 📊 Benchmark Performance
 
@@ -296,4 +296,3 @@ Explore more efficient LLM projects from us:
 </td>
 </tr>
 </table>
-
