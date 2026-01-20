@@ -14,10 +14,10 @@ import torch.distributed as dist
 import threading
 import queue
 from transformers import AutoTokenizer
+from multiprocessing import Value
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -26,7 +26,8 @@ from r2r.utils.switching import create_switching_strategy
 from r2r.utils.token_manager import SGLangTokenManager
 from r2r.utils.dataclass import ModelOutputs
 from r2r.utils.sampling import sample_token
-from r2r.models.batch_inference.schedule_req import WaitingReq, SimpleSamplingParams
+from r2r.models.sglang_patch.schedule_req import WaitingReq, SimpleSamplingParams
+from r2r.models.sglang_patch.llm_scheduler import LLMScheduler
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -39,27 +40,29 @@ class LLMServer:
     """LLM Server launched by SGLang"""
     def __init__(
         self,
-        reference_sglang_kwargs, 
+        model_config: dict,
+        reference_sglang_kwargs: dict,
         quick_num_gpus: int,
         reference_num_gpus: int,
         reference_master_port: int | None = None,
         ready_queue: Optional[mp.Queue] = None,
         overlap_tp_schedule: bool = False,
-        # New queues for inter-server communication
+        mem_fraction_static: Optional[float] = None,
+        llm_kvcache_size: Optional[Value] = None,
     ):
         self.is_reset_cache = False
         self.shutdown_loop = False
         self.batch = None
-        self.new_reqs=[]
+        self.new_reqs = []
+        self.model_config = model_config
         self.reference_sglang_kwargs = reference_sglang_kwargs
         self.quick_num_gpus = quick_num_gpus if overlap_tp_schedule is False else 0
         self.reference_num_gpus = reference_num_gpus
         # Queue for signaling worker readiness to outside controller (e.g., SLDisaggregationSystem)
         self.ready_queue = ready_queue
-        self._seq_to_slm = 0
         # Inter-server queues (outbound to SLM / inbound from SLM)
         self.queue_to_slm = mp.Queue()
-        self._inbound_rank_queues = [mp.Queue() for _ in range(self.reference_num_gpus)]
+        self._inbound_queues = mp.Queue()
 
         # ================ Inter-server PUB (LLM -> SLM) BEFORE workers =====================
         # (Notify PUB for finished reqs remains separate above; this PUB is for generic inter-server msgs)
@@ -85,19 +88,6 @@ class LLMServer:
                     break
                 if self._pub_slm is None:
                     continue
-                try:
-                    if not hasattr(item, "_seq"):
-                        try:
-                            setattr(item, "_seq", self._seq_to_slm)
-                        except Exception:
-                            # Fallback for dict-like payloads
-                            if isinstance(item, dict):
-                                item["_seq"] = self._seq_to_slm
-                    # Increment after assignment
-                    self._seq_to_slm += 1
-                except Exception:
-                    # Best-effort; continue even if _seq cannot be set
-                    pass
                 try:
                     self._pub_slm.send_pyobj(item)
                 except Exception:
@@ -134,20 +124,22 @@ class LLMServer:
             # Some environments may disallow setting signals (e.g., Jupyter)
             pass
 
-        print(f"Loading reference model {MODEL_DICT['reference']['model_name']}...")
+        print(f"Loading reference model {self.model_config['reference']['model_name']}...")
 
         reference_server_args = ServerArgs(
-            model_path=MODEL_DICT["reference"]["model_path"], 
-            disable_cuda_graph=True, 
+            model_path=self.model_config["reference"]["model_path"],
+            disable_cuda_graph=False,
             disable_overlap_schedule=True,
             disable_radix_cache=True,
-            mem_fraction_static=0.8 if overlap_tp_schedule else 0.9,
+            mem_fraction_static=mem_fraction_static,
             **reference_sglang_kwargs,
         )
+        reference_server_args.tp_size = reference_num_gpus
         # Rank queues kept for future forwarded request injection (e.g., from SLM via inbound queue processing)
         self._stop_event = threading.Event()
         self._recv_thread = None  # Deprecated broadcast SUB thread removed.
         self.reference_model_procs = []
+        self.llm_kvcache_size = llm_kvcache_size
         for rank in range(reference_num_gpus):
             proc = mp.Process(
                 target=self.reference_model_worker,
@@ -157,46 +149,39 @@ class LLMServer:
                     self.reference_num_gpus, 
                     reference_server_args, 
                     self.reference_master_port, 
-                    self.ready_queue, 
-                    self._inbound_rank_queues[rank], 
-                    self.queue_to_slm),
+                    self.ready_queue,
+                    self._inbound_queues, 
+                    self.queue_to_slm,
+                    self.llm_kvcache_size if rank == 0 else None),
             )
             # Mark as daemon so that workers die when parent exits unexpectedly
             proc.daemon = True
             proc.start()
             self.reference_model_procs.append(proc)
 
-    
-    def process_new_requests(reqs: List[Req], scheduler: Scheduler):
-        if len(reqs) == 0:
-            return
-        for req in reqs:
-            if req.status in ("SHUTDOWN", "RESET_CACHE"):
-                continue
-            scheduler.waiting_queue.append(req)
-
     @staticmethod
-    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
+    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, llm_kvcache_size: Optional[Value] = None):
         # Use a dedicated tcp init_method to avoid port collision with quick model's default 29500 store
         init_method = f"tcp://127.0.0.1:{master_port}"
         dist.init_process_group(backend='nccl', init_method=init_method, rank=rank, world_size=world_size)
         torch.cuda.set_device(rank + quick_num_gpus)
 
         port_args = PortArgs.init_new(server_args)
-        scheduler = Scheduler(
+        scheduler = LLMScheduler(
             server_args=server_args,
             port_args=port_args,
             gpu_id=rank+quick_num_gpus,
             tp_rank=rank,
             dp_rank=0,
             moe_ep_rank=0,
-            pp_rank=0,
+            pp_rank=0, # Pipeline parallelism is not Supported
+            llm_kvcache_size=llm_kvcache_size,
         )
+        print(f"[reference rank {rank}] attn_tp_rank: {scheduler.attn_tp_rank}")
         tokenizer = scheduler.tokenizer
         # Signal readiness
         if ready_queue is not None:
             try:
-                # 仅 rank0 发送 tokenizer，其它 rank 发送 None 占位，方便主控端一次性获取
                 ready_queue.put(("READY", rank, tokenizer if rank == 0 else None))
             except Exception as e:
                 print(f"[rank {rank}] failed to put READY: {e}")
@@ -223,37 +208,31 @@ class LLMServer:
         print(f"Reference model worker {rank} started, waiting for requests...")
         
         try:
-            idle_loops = 0
             while True:
-                if inbound_queue is not None: # Process message from SLM
+                if inbound_queue is not None: # Process message from LLM
                     device = scheduler.batch_not_need.device
-                    commit_msgs = LLMServer.fetch_and_align_inbound(
+                    slm_reqs = LLMServer.recv_reqs_from_slm(
                         inbound_queue=inbound_queue,
-                        rank=rank,
-                        world_size=world_size,
-                        device=device,
+                        scheduler=scheduler,
                     )
-                    is_shutdown = [msg for msg in commit_msgs if getattr(msg, "status", "") == "SHUTDOWN"]
-                    is_reset_cache = [msg for msg in commit_msgs if getattr(msg, "status", "") == "RESET_CACHE"]
-                    commit_msgs = [msg for msg in commit_msgs if getattr(msg, "status", "") not in ("SHUTDOWN", "RESET_CACHE")]
+                    is_shutdown = [msg for msg in slm_reqs if getattr(msg, "status", "") == "SHUTDOWN"]
+                    is_reset_cache = [msg for msg in slm_reqs if getattr(msg, "status", "") == "RESET_CACHE"]
+                    slm_reqs = [msg for msg in slm_reqs if getattr(msg, "status", "") not in ("SHUTDOWN", "RESET_CACHE")]
                     if is_shutdown:
                         print(f"[reference rank{rank}] SHUTDOWN received (queue), exiting...")
                         break
                     elif is_reset_cache:
                         ok = scheduler.flush_cache()
                         print(f"[reference rank{rank}] Cache reset (queue): {ok}")
+                    if slm_reqs:
+                        LLMServer.process_result_from_slm(scheduler, slm_reqs)
 
-                    if commit_msgs:
-                        LLMServer.process_result_from_slm(scheduler, commit_msgs)
                 # For LLM, there is no need to process new reqs from rank_queue
                 batch = scheduler.get_next_batch_to_run()
                 if batch:
-                    idle_loops = 0
                     result = scheduler.run_batch(batch)
                     LLMServer.process_batch_results(rank, batch, result, scheduler, outbound_queue)
                     scheduler.last_batch = batch
-                else:
-                    idle_loops += 1
                 try:
                     if os.getppid() == 1:
                         print(f"[rank {rank}] parent process disappeared, exiting worker.")
@@ -263,6 +242,8 @@ class LLMServer:
         except BaseException as e:
             # Any unexpected error -> exit loop to avoid orphaned NCCL workers
             print(f"[rank {rank}] reference worker fatal error: {e}. Exiting loop.")
+            import traceback
+            traceback.print_exc()
         finally:
             try:
                 if dist.is_initialized():
@@ -274,7 +255,7 @@ class LLMServer:
     def process_result_from_slm(scheduler: Scheduler, commit_msgs):
         new_token_ids = {}
         returned_rid_list = []
-        finished_rid_list = torch.zeros(1000)
+        finished_rid_list = set()
         if scheduler.batch_not_need is not None:
             req_already_prefilled = [req.rid for req in scheduler.batch_not_need.reqs]
         else:
@@ -283,7 +264,7 @@ class LLMServer:
             new_token_ids[waiting_req.rid] = waiting_req.new_token_ids
             returned_rid_list.append(waiting_req.rid)
             if waiting_req.status == "finished":
-                finished_rid_list[waiting_req.rid] = 1
+                finished_rid_list.add(waiting_req.rid)
                 continue
             if waiting_req.rid not in req_already_prefilled:
                 origin_input_ids = waiting_req.new_token_ids
@@ -306,7 +287,7 @@ class LLMServer:
         if scheduler.batch_not_need is not None:
             not_keep_indices = []
             for i, req in enumerate(scheduler.batch_not_need.reqs):
-                if finished_rid_list[req.rid] == 1:
+                if req.rid in finished_rid_list:
                     scheduler.tree_cache.cache_finished_req(req)
                     continue
                 if req.rid in returned_rid_list:
@@ -321,58 +302,71 @@ class LLMServer:
                         status="need",
                         last_cached_loc=req.last_cached_loc,
                     )
+                    new_req.req_pool_idx = req.req_pool_idx
                     if not hasattr(new_req, 'device'):
                         new_req.device = scheduler.batch_not_need.device
                     scheduler.waiting_queue.append(new_req)
                 else:
                     not_keep_indices.append(i)
             scheduler.batch_not_need.filter_batch(keep_indices=not_keep_indices)
-        
-
+    
     @staticmethod
-    def fetch_and_align_inbound(inbound_queue: mp.Queue, rank: int, world_size: int, device: torch.device):
-        """与 SLM 一致：按 _seq 做跨 rank 对齐，并将未对齐部分缓存在进程内 map 中。"""
-        if not hasattr(LLMServer, "_inbound_pending_map"):
-            LLMServer._inbound_pending_map = {}  # { id(queue): list }
-        pending_map = LLMServer._inbound_pending_map
-        qkey = id(inbound_queue)
+    def recv_reqs_from_slm(inbound_queue: Optional[mp.Queue], scheduler: Scheduler):
 
-        pending = pending_map.get(qkey, [])
+        if scheduler.pp_rank == 0:
+            if scheduler.attn_tp_rank == 0:
+                recv_reqs = []
 
-        while True:
-            try:
-                item = inbound_queue.get_nowait()
-            except queue.Empty:
-                break
-            except Exception:
-                break
-            pending.append(item)
+                while True:
+                    try:
+                        item = inbound_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    except Exception:
+                        break
+                    recv_reqs.append(item)
+            else:
+                recv_reqs = None
+        else:
+            raise RuntimeError("Pipeline parallelism is not supported.")
 
-        if not pending:
-            return []
+        if scheduler.server_args.enable_dp_attention:
+            if scheduler.attn_tp_rank == 0:
+                work_reqs = [
+                    req
+                    for req in recv_reqs
+                ]
+                control_reqs = [
+                    req
+                    for req in recv_reqs
+                ]
+            else:
+                work_reqs = None
+                control_reqs = None
 
-        local_max = getattr(pending[-1], "_seq", None)
-        if local_max is None:
-            out = list(pending)
-            pending_map[qkey] = []
-            return out
-
-        t_local = torch.tensor([int(local_max)], device=device, dtype=torch.long)
-        gather_buf = [torch.zeros_like(t_local) for _ in range(world_size)]
-        dist.all_gather(gather_buf, t_local)
-        commit_seq = min(int(t.item()) for t in gather_buf)
-
-        commit_end = 0
-        while commit_end < len(pending) and getattr(pending[commit_end], "_seq", -1) <= commit_seq:
-            commit_end += 1
-
-        if commit_end == 0:
-            pending_map[qkey] = pending
-            return []
-
-        out = pending[:commit_end]
-        pending_map[qkey] = pending[commit_end:]
-        return out
+            if scheduler.attn_tp_size != 1:
+                work_reqs = broadcast_pyobj(
+                    work_reqs,
+                    scheduler.attn_tp_group.rank,
+                    scheduler.attn_tp_cpu_group,
+                    src=scheduler.attn_tp_group.ranks[0],
+                )
+            if scheduler.tp_size != 1:
+                control_reqs = broadcast_pyobj(
+                    control_reqs,
+                    scheduler.tp_group.rank,
+                    scheduler.tp_cpu_group,
+                    src=scheduler.tp_group.ranks[0],
+                )
+            recv_reqs = work_reqs + control_reqs
+        elif scheduler.tp_size != 1:
+            recv_reqs = broadcast_pyobj(
+                recv_reqs,
+                scheduler.tp_group.rank,
+                scheduler.tp_cpu_group,
+                src=scheduler.tp_group.ranks[0],
+            )
+        return recv_reqs
 
     def shutdown(self):
         """Terminate reference model worker processes and close notify PUB.
@@ -492,12 +486,10 @@ class LLMServer:
                             break
                         except Exception:
                             break
-                        # Replicate to every rank's inbound queue to preserve identical ordering
-                        for q in self._inbound_rank_queues:
-                            try:
-                                q.put_nowait(msg)
-                            except Exception:
-                                pass
+                        try:
+                            self._inbound_queues.put_nowait(msg)
+                        except Exception:
+                            pass
         self._recv_from_slm_thread = threading.Thread(target=_recv_loop, daemon=True)
         self._recv_from_slm_thread.start()
         print(f"[LLMServer] SUB from SLM started on port {port}, loaded successfully")
@@ -510,26 +502,6 @@ class LLMServer:
                 self.queue_to_slm.put(obj)
             except Exception:
                 pass
-
-    @staticmethod
-    def _drain_rank_queue(scheduler: Scheduler, rank_queue: mp.Queue, rank: Optional[int] = None):
-        out = []
-        while True:
-            try:
-                item = rank_queue.get_nowait()
-            except queue.Empty:
-                break
-            status = getattr(item, "status", "")
-            if status == "SHUTDOWN":
-                return -1
-            elif status == "RESET_CACHE":
-                ok = scheduler.flush_cache()
-                print(f"[reference rank{scheduler.tp_rank}] Cache reset: {ok}")
-                continue
-            item.eos_token_id = scheduler.model_config.hf_eos_token_id
-            item.vocab_size = scheduler.model_config.vocab_size
-            out.append(item)
-        return out
     
     def process_batch_results(rank: int, batch: ScheduleBatch, result, scheduler: Scheduler, outbound_queue: Optional[mp.Queue] = None):
         batch.output_ids = result.next_token_ids

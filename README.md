@@ -31,6 +31,9 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 ⭐ **Feel free to star this repo or cite our paper if you find it useful!**
 
 ## 📰 News
+
+* [2026/01] `v0.1` release! Major system update to support online serving with OpenAI-compatible API. Support batch inference, CUDA graph, and much more, with a cleaner interface.
+
 * [2025/10] Added support for the Qwen3 model family. Router checkpoints are now available [here](https://huggingface.co/nics-efc/R2R_router_collections).
 
 * [2025/09] Accepted by the NeurIPS'25 conference.
@@ -44,25 +47,82 @@ Check out our interactive demo and see R2R in action by visiting our [project pa
 
 ## 🛠️ Environment Setup
 
-Use the following script to create a new Conda environment and install all dependencies:
+Create new conda environment
 
 ```bash
-bash setup_env.sh
+conda create -n r2r python=3.10
+conda activate r2r
 ```
 
-`setup_env.sh` installs `flashinfer==0.2.3`. Make sure you install a FlashInfer build that matches your CUDA version. If your system uses a different CUDA version, install the corresponding FlashInfer package for your setup.
+Install all required packages with uv
+
+```bash
+pip install uv
+uv pip install -e .
+```
 
 <details>
-<summary>Troubleshooting</summary>
+<summary>Trouble Shooting</summary>
+
+1. If you do not wish to use `uv`, You can also install using `pip`:
+
+```bash
+pip install -e .
+pip install sgl-kernel==0.3.8
+```
+
+2. If you accidentally install the wrong flashinfer and encounter related issue, please uninstall it before re-installation.
 
 ```bash
 pip uninstall flashinfer-python
 rm -rf ~/.cache/flashinfer/
 rm -rf ~/.triton/cache
 ```
+
 </details>
 
-## 🚀 Usage
+## 🚀 Quick Start
+
+R2R is fully compatible with SGLang chat completion API. Simply:
+
+1. Launch the server.
+
+```bash
+python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml --port 30000
+```
+
+2. Send requests with any Open-AI compatible API. 
+
+```python
+import requests
+
+url = f"http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "default",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
+
+<details>
+<summary>Custom download and OpenAI client</summary>
+
+1. To download existing R2R router checkpoints, like Qwen3-0.6B with Qwen3-8B, use
+
+```bash
+hf download nics-efc/R2R_router_collections --repo-type model --include "Qwen3-0.6B+Qwen3-8B/**" --local-dir resource
+```
+
+See [Pretrained routers](#-pretrained-routers) for the full list of supported models.
+
+2. To use other request methods, like OpenAI client, see examples in `test/test_http_openai_client.py` and `test/test_http_openai_chat_completion.py`.
+
+</details>
+
+## 📚 Usage
 
 ### 1. 💬 Run Mix inference with R2R
 
@@ -71,17 +131,17 @@ We provide an interactive example in `interactive_chat.py`. The main `DynamicSim
 You can download the pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main) and place the file `default_router.pt` under `resource/` folder:
 
 ```bash
-python script/playground/interactive_chat.py --router_path resource/default_router.pt
+python script/inference/interactive_chat.py --config-path config/Qwen3-0.6B+Qwen3-8B.yaml
 ```
 
-> The detailed model configurations are in `r2r/utils/config.py`.
+> The detailed model configurations are in `config` folder.
 
 ### 2. 📊 Benchmark Performance
 
 The following script evaluates R2R's accuracy and speed on AIME24-25, GPQA-Diamond, or LiveCodeBench:
 
 ```bash
-python script/evaluate/hf_dataset_sglang.py --dataset aime --router_path resource/default_router.pt --use_hybrid
+python script/evaluate/hf_dataset_sglang.py --dataset aime --config-path config/Qwen3-0.6B+Qwen3-8B.yaml --use_hybrid 
 ```
 
 Detailed configurations for benchmark datasets and evaluation metrics are available in `script/evaluate/eval_configs/dataset_configs.json`. Moreover, our default router_path and threshold settings are provided through `script/evaluate/eval_configs/r2r_configs.json`.
@@ -262,4 +322,3 @@ Explore more efficient LLM projects from us:
 </td>
 </tr>
 </table>
-

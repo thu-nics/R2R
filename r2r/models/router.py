@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +10,32 @@ import math
 import inspect
 from transformers import AutoModelForCausalLM
 from typing import List
+
+
+def load_config_from_folder(folder_path: str) -> dict:
+    """Load model_configs.json and router config from a folder.
+
+    Args:
+        folder_path: Path to folder containing model_configs.json
+
+    Returns:
+        dict with keys:
+            - model_config: dict from model_configs.json
+            - router_config: dict from model_config["router"] (may be empty)
+            - router_path: router model path from router_config (may be None)
+    """
+    model_configs_path = os.path.join(folder_path, "model_configs.json")
+    with open(model_configs_path, "r") as f:
+        model_config = json.load(f)
+
+    router_config = model_config.get("router", {})
+    router_path = router_config.get("router_path")
+
+    return {
+        "model_config": model_config,
+        "router_config": router_config,
+        "router_path": router_path,
+    }
 
 ################ Model Registry, Saving and Loading #################
 MODEL_REGISTRY = {}
@@ -236,19 +263,63 @@ def save_model(
     )
 
 
-def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Module, dict]:
+def load_model(model_path: str, device: str = "cuda", override_init_args: dict = None, **kwargs) -> tuple[nn.Module, dict]:
     """
     Load a model from a saved file.
 
     Args:
         model_path: Path to the saved model
         device: Device to load the model to
+        override_init_args: Optional dict of init_args to override. Only the keys present
+                           in this dict will override the corresponding values in the
+                           saved model's init_args. Other init_args remain unchanged.
 
     Returns:
         The loaded model and its configuration
     """
+    model_path_to_load = None
+    hf_error = None
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+
+        repo_id = None
+        filename = None
+        if model_path.endswith(".pt"):
+            candidate_repo, candidate_file = os.path.split(model_path)
+            if candidate_repo:
+                repo_id = candidate_repo
+                filename = candidate_file
+        else:
+            repo_id = model_path
+
+        if repo_id:
+            if filename is None:
+                repo_files = list_repo_files(repo_id)
+                candidates = [
+                    "default_router.pt",
+                    "router.pt",
+                    "default_router_sampling.pt",
+                ]
+                filename = next(
+                    (name for name in candidates if name in repo_files),
+                    None,
+                )
+                if filename is None:
+                    pt_files = [name for name in repo_files if name.endswith(".pt")]
+                    if pt_files:
+                        filename = sorted(pt_files)[0]
+            if filename:
+                model_path_to_load = hf_hub_download(repo_id=repo_id, filename=filename)
+    except Exception as exc:
+        hf_error = exc
+
+    if model_path_to_load is None:
+        model_path_to_load = model_path
+        if hf_error is not None:
+            print(f"HF load failed, falling back to local path: {hf_error}")
+
     # Load model configuration
-    model_config = torch.load(model_path, map_location=device, weights_only=False)
+    model_config = torch.load(model_path_to_load, map_location=device, weights_only=False)
 
     # Extract model_type and state_dict
     model_type = model_config.pop("model_type", None)
@@ -258,6 +329,15 @@ def load_model(model_path: str, device: str = "cuda", **kwargs) -> tuple[nn.Modu
     init_args = model_config.pop("init_args", {})
     common_args = model_config.pop("common_args", {})
     model_specific_args = model_config.pop("model_specific_args", {})
+
+    # Override init_args with values from override_init_args (only keys present in override_init_args)
+    if override_init_args is not None:
+        for key, value in override_init_args.items():
+            if key in init_args:
+                print(f"Overriding init_arg '{key}': {init_args[key]} -> {value}")
+            else:
+                print(f"Adding new init_arg '{key}': {value}")
+            init_args[key] = value
 
     # Create model with init_args
     dtype = model_config.get("training", {}).pop("dtype", None)
@@ -862,11 +942,7 @@ class HiddenStatesTokenLMHeadLogitsClassifier(nn.Module):
             print(f"Successfully copied weights from {pretrained_model_name} embeddings")
         except Exception as e:
             print(f"Failed to load pretrained model: {e}")
-            # Create a simple embedding layer as fallback
-            vocab_size = 50257  # Default GPT-2 vocab size
-            embed_dim = hidden_dims[0]
-            self.token_embeddings = nn.Embedding(vocab_size, embed_dim)
-            print(f"Using randomly initialized embeddings")
+            raise e
 
         if self.freeze_lm_head:
             self.token_embeddings.weight.requires_grad = False

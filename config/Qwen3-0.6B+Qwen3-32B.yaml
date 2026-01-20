@@ -1,0 +1,49 @@
+{
+  "special_tokens": {
+    "think_start": 151667,
+    "think_end": 151668
+  },
+  "quick": {
+    "model_name": "Qwen3-0.6B",
+    "model_path": "Qwen/Qwen3-0.6B",
+    "param": "0.6",
+    "mem_fraction_static": 0.15
+  },
+  "reference": {
+    "model_name": "Qwen3-32B",
+    "model_path": "Qwen/Qwen3-32B",
+    "param": "32",
+    "mem_fraction_static": 0.80
+  },
+  "continuation_main": {
+    "model_name": "Qwen3-32B",
+    "model_path": "Qwen/Qwen3-32B",
+    "param": "32",
+    "tp_size": 2,
+    "base_gpu_id": 2,
+    "mem_fraction_static": 0.90
+  },
+  "continuation_reference": {
+    "model_name": "Qwen3-32B",
+    "model_path": "Qwen/Qwen3-32B",
+    "param": "32",
+    "tp_size": 1,
+    "base_gpu_id": 3,
+    "mem_fraction_static": 0.90
+  },
+  "verify": {
+    "model_name": "Qwen2.5-72B-Instruct",
+    "model_path": "Qwen/Qwen2.5-72B-Instruct",
+    "mem_fraction_static": 0.90,
+    "max_new_tokens": 16,
+    "base_gpu_id": 4,
+    "tp_size": 4
+  },
+  "router": {
+    "router_name": "Qwen3-0.6B+Qwen3-32B",
+    "router_path": "GY2233/Qwen3_0_6B_Qwen3_32B", 
+    "override_init_args":{
+      "pretrained_model_name": "Qwen/Qwen3-0.6B"
+    }
+  }
+}

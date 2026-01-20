@@ -4,17 +4,21 @@ import time
 import zmq
 import pickle
 from tqdm import tqdm
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union, List, Dict
 import multiprocessing as mp
 import torch.distributed as dist
 from transformers import AutoTokenizer
 import threading
+import asyncio
+import os
+from multiprocessing import Value
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29500"
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
-from r2r.models.batch_inference.slm_server import SLMServer
-from r2r.models.batch_inference.llm_server import LLMServer
+from r2r.models.sglang_patch.slm_server import SLMServer
+from r2r.models.sglang_patch.llm_server import LLMServer
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -29,6 +33,77 @@ from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, 
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.server_args import PortArgs, ServerArgs
 from sglang.srt.managers.io_struct import AbortReq
+from sglang.srt.configs.model_config import ModelConfig
+
+import r2r.models.sglang_patch.patch
+
+
+def get_mem_fraction_statics(
+    model_config: Dict,
+    overlap_tp_schedule: bool = False,
+    quick_sglang_kwargs: Dict = {},
+    reference_sglang_kwargs: Dict = {},
+    quick_num_gpus: int = 1,
+    reference_num_gpus: int = 1
+) -> Tuple[float, float]:
+    if not overlap_tp_schedule:
+        return 0.9, 0.9
+
+    small_server_args = ServerArgs(
+        model_path=model_config["quick"]["model_path"],
+        disable_cuda_graph=True,
+        disable_overlap_schedule=True,
+        disable_radix_cache=False,
+        mem_fraction_static=0.9,
+        **quick_sglang_kwargs,
+    )
+    large_server_args = ServerArgs(
+        model_path=model_config["reference"]["model_path"],
+        disable_cuda_graph=True,
+        disable_overlap_schedule=True,
+        disable_radix_cache=False,
+        mem_fraction_static=0.9,
+        **reference_sglang_kwargs,
+    )
+
+    large_model_config = ModelConfig.from_server_args(large_server_args)
+    small_model_config = ModelConfig.from_server_args(small_server_args)
+
+    small_num_layers = small_model_config.num_hidden_layers
+    large_num_layers = large_model_config.num_hidden_layers
+
+    small_cell_size = (
+        small_model_config.get_num_kv_heads(quick_num_gpus)
+        * small_model_config.head_dim
+        * small_num_layers
+        * 2
+        * torch._utils._element_size(small_model_config.dtype)
+    )
+    large_cell_size = (
+        large_model_config.get_num_kv_heads(reference_num_gpus)
+        * large_model_config.head_dim
+        * large_num_layers
+        * 2
+        * torch._utils._element_size(large_model_config.dtype)
+    )
+
+    small_bytes = torch.tensor([], dtype=small_model_config.dtype).element_size()
+    small_model_mem = small_bytes * float(model_config["quick"]["param"]) # in GB
+    large_bytes = torch.tensor([], dtype=large_model_config.dtype).element_size()
+    large_model_mem = large_bytes * float(model_config["reference"]["param"]) # in GB
+    total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(max(quick_num_gpus,reference_num_gpus))) / (1 << 30) # in GB
+    available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus))
+
+    assert available_gpu_memory >= 0, f"Not enough GPU memory for both models: total {total_gpu_memory} GB, used {small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus} GB"
+
+    total_token_num = int(available_gpu_memory * 0.9 * (1<<30) / (small_cell_size + large_cell_size))
+
+    small_mem_fraction_static = (total_token_num * small_cell_size + small_model_mem / quick_num_gpus * (1<<30)) / (total_gpu_memory * (1<<30))
+    large_mem_fraction_static = (total_token_num * large_cell_size + large_model_mem / reference_num_gpus * (1<<30)) / (total_gpu_memory * (1<<30))
+
+    print(f"[SLDisaggregationSystem] overlap_tp_schedule=True, calculated mem_fraction_static: quick model {small_mem_fraction_static:.2f}, reference model {large_mem_fraction_static:.2f}, max num tokens is {total_token_num}")
+
+    return small_mem_fraction_static, large_mem_fraction_static
 
 
 class SLDisaggregationSystem:
@@ -36,6 +111,7 @@ class SLDisaggregationSystem:
 
     def __init__(
         self,
+        model_config: Dict,
         device: Optional[str] = "cuda",
         dtype: torch.dtype = torch.bfloat16,
         switching_strategy: str = "neural",
@@ -46,12 +122,37 @@ class SLDisaggregationSystem:
         is_logits_processor: bool = True,
         overlap_tp_schedule: bool = False,
     ):
+        """Initialize the SL Disaggregation System for dynamic model selection.
+
+        Args:
+            model_config: Model configuration dict with structure:
+                {
+                    "quick": {"model_path": str, "param": str},
+                    "reference": {"model_path": str, "param": str}
+                }
+            device: Device to run models on (default: "cuda")
+            dtype: Data type for model weights (default: torch.bfloat16)
+            switching_strategy: Strategy for routing between models.
+                Options: "neural", "always_quick", "always_reference", etc.
+            strategy_kwargs: Additional kwargs for the switching strategy.
+                For "neural": {"model_path": str, "threshold": float}
+            is_record: Whether to record generation details (default: False)
+            quick_sglang_kwargs: SGLang kwargs for quick model, e.g.:
+                {"dtype": "bfloat16", "tp_size": 1, "enable_return_hidden_states": True}
+            reference_sglang_kwargs: SGLang kwargs for reference model, e.g.:
+                {"dtype": "bfloat16", "tp_size": 1}
+            is_logits_processor: Whether to use logits processor (default: True)
+            overlap_tp_schedule: Whether to overlap TP scheduling for memory
+                optimization when both models share GPUs (default: False)
+        """
         self.device = device
         self.dtype = dtype
+        self.model_config = model_config
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy = switching_strategy
         self.is_record = is_record
         self.rid = 1
+        self.rid_lock = threading.Lock()
         self.tokenizer = None
         self.reference_tokenizer = None
 
@@ -82,17 +183,39 @@ class SLDisaggregationSystem:
 
         self._quick_ready_queue = mp.Queue()
 
+        small_mem_fraction_static, large_mem_fraction_static = get_mem_fraction_statics(
+            model_config=self.model_config,
+            overlap_tp_schedule=overlap_tp_schedule,
+            quick_sglang_kwargs=quick_sglang_kwargs,
+            reference_sglang_kwargs=reference_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            reference_num_gpus=self.reference_num_gpus,
+        )
+
+        """
+        cell_size = (
+            self.model_config.get_num_kv_heads(get_attention_tp_size())
+            * self.model_config.head_dim
+            * num_layers
+            * 2
+            * torch._utils._element_size(self.kv_cache_dtype)
+        )
+        """
+        self.llm_kvcache_size = Value('i', 0)
+
         # Launch quick model workers with req_port(port that receive Req objects)
         # Inter-server queues (Q2): create before servers so workers can use them
         # Instantiate SLMServer first (it binds its PUB for SLM->LLM)
         self.slm_server = SLMServer(
-            quick_sglang_kwargs,
-            self.quick_num_gpus,
-            self.req_port,
-            self._quick_ready_queue,
-            self.switching_strategy,
-            self.strategy_kwargs,
-            overlap_tp_schedule=overlap_tp_schedule,
+            model_config=self.model_config,
+            quick_sglang_kwargs=quick_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            req_port=self.req_port,
+            ready_queue=self._quick_ready_queue,
+            switching_strategy=self.switching_strategy,
+            strategy_kwargs=self.strategy_kwargs,
+            mem_fraction_static=small_mem_fraction_static,
+            llm_kvcache_size=self.llm_kvcache_size,
         )
 
         try:
@@ -111,15 +234,18 @@ class SLDisaggregationSystem:
             raise RuntimeError("Waiting for SLMServer launching or Failed to get tokenizer from scheduler") from e
 
 
-        # Launch quick model workers
+        # Launch reference model workers
         self._llm_ready_queue = mp.Queue()
         self.llm_server = LLMServer(
-            reference_sglang_kwargs,
-            self.quick_num_gpus,
-            self.reference_num_gpus,
+            model_config=self.model_config,
+            reference_sglang_kwargs=reference_sglang_kwargs,
+            quick_num_gpus=self.quick_num_gpus,
+            reference_num_gpus=self.reference_num_gpus,
             reference_master_port=29501,
             ready_queue=self._llm_ready_queue,
             overlap_tp_schedule=overlap_tp_schedule,
+            mem_fraction_static=large_mem_fraction_static,
+            llm_kvcache_size=self.llm_kvcache_size,
         )
 
         try:
@@ -128,7 +254,7 @@ class SLDisaggregationSystem:
             ref_tok = None
             while got_llm < self.reference_num_gpus:
                 ready_msg = self._llm_ready_queue.get(timeout=300)
-                # 兼容旧格式 (msg, rank) 或新格式 (msg, rank, tokenizer)
+                # Compatible with formats: (msg, rank) or (msg, rank, tokenizer)
                 if len(ready_msg) == 2:
                     msg, rank = ready_msg
                     tk = None
@@ -248,22 +374,27 @@ class SLDisaggregationSystem:
         quick_sampling_params = SamplingParams(temperature=0.0, top_p=1.0, top_k=-1, max_new_tokens=warmup_iter, stop=[])
         for i, (text, input_id) in enumerate(zip(input_text, input_ids)):
             req = Req(
-                rid=i,
+                rid=str(i),
                 origin_input_text=text,
                 origin_input_ids=input_id,
                 sampling_params=quick_sampling_params,
                 return_hidden_states=True,
                 status="need",
             )
-            # 通过 ZMQ 发送 Req 对象到工作进程
+            req.display_progress = False
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
             except zmq.Again:
-                # 如果发送缓冲区满，稍等再试（简单退避）
                 time.sleep(0.01)
                 self.req_sender.send_pyobj(req)
         
         time.sleep(5)
+    
+    def get_rid(self):
+        with self.rid_lock:
+            rid = self.rid
+            self.rid += 1
+        return str(rid)
 
     def generate(
         self,
@@ -274,6 +405,7 @@ class SLDisaggregationSystem:
         top_k: int = 100,
         record_generation: bool = False,
         print_tokens: bool = False,
+        display_progress: bool = False,
     ) -> Union[
         List[str],
         Tuple[List[str], List[GenerationRecorder]]
@@ -294,7 +426,6 @@ class SLDisaggregationSystem:
             If record_generation is False: list of generated texts
             If record_generation is True: tuple of (list of generated texts, list of GenerationRecorders)
         """
-        self.total_prompts_num = 0
         self.reset_cache_simple()
         #batch_input_ids = input_ids
         #batch_size = len(batch_input_ids)
@@ -319,8 +450,9 @@ class SLDisaggregationSystem:
         )
 
         num_prompts = len(input_ids)
-        rids = [i+self.rid for i in range(num_prompts)]
-        self.rid += num_prompts
+        rids = []
+        for i in range(num_prompts):
+            rids.append(self.get_rid())
         for i, input_id in enumerate(input_ids):
             req = Req(
                 rid=rids[i],
@@ -330,11 +462,12 @@ class SLDisaggregationSystem:
                 return_hidden_states=True,
                 status="need",
             )
-            # 通过 ZMQ 发送 Req 对象到工作进程
+            req.display_progress = display_progress
+            # Send Req object to worker process via ZMQ
             try:
                 self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
             except zmq.Again:
-                # 如果发送缓冲区满，稍等再试（简单退避）
+                # If send buffer is full, wait and retry (simple backoff)
                 time.sleep(0.01)
                 self.req_sender.send_pyobj(req)
         # Wait until all rids appear in finished map
@@ -361,6 +494,94 @@ class SLDisaggregationSystem:
             time.sleep(0.1)
 
         return results
+    
+    async def generate_one_request(
+        self,
+        input_id: List[int],
+        max_new_tokens: int = 2048,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        top_k: int = 100,
+        display_progress: bool = False,
+    ) -> Union[Dict, object]:
+        """
+        Async version of generate for a single request.
+        Does not reset cache.
+        """
+        # Prepare sampling parameters for SGLang (Quick Model)
+        # sglang will revise the output logits in-place if we set temperature > 0.0
+        # so we set temperature to 0.0 here and sample in the decode_step
+        quick_sampling_params = SamplingParams(
+            temperature=0.0,
+            top_p=top_p,
+            top_k=top_k,
+            max_new_tokens=max_new_tokens,
+            stop=[],
+        )
+
+        rid = self.get_rid()
+        
+        req = Req(
+            rid=rid,
+            origin_input_text=self.tokenizer.decode(input_id),
+            origin_input_ids=input_id,
+            sampling_params=quick_sampling_params,
+            return_hidden_states=True,
+            status="need",
+        )
+        req.display_progress = display_progress
+
+        # Send Req object via ZMQ
+        # Note: ZMQ send is generally fast enough to be treated as sync, 
+        # but we handle EAGAIN with async sleep just in case.
+        try:
+            self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            await asyncio.sleep(0.01)
+            self.req_sender.send_pyobj(req)
+
+        # Wait asynchronously until the rid appears in finished map
+        while True:
+            if rid in self.finished_reqs:
+                return self.finished_reqs[rid]
+            await asyncio.sleep(0.01) # Non-blocking wait
+
+    async def generate_batch_requests(
+        self,
+        input_ids: List[List[int]],
+        max_new_tokens: int = 2048,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        top_k: int = 100,
+        display_progress: bool = False,
+    ):
+        tasks = []
+        
+        # 1. Create all tasks
+        for i, input_id in enumerate(input_ids):
+            # Create task and start execution immediately
+            task = asyncio.create_task(
+                self.generate_one_request(
+                    input_id=input_id,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    display_progress=display_progress
+                )
+            )
+            tasks.append(task)
+
+        results = []
+
+        for i, future in enumerate(asyncio.as_completed(tasks)):
+            try:
+                result = await future
+                results.append(result)
+            except Exception as e:
+                pass
+
+        return results
 
     def reset_cache_simple(self):
         """Reset the cache for the quick model"""
@@ -375,7 +596,6 @@ class SLDisaggregationSystem:
             )
             self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
         except zmq.Again:
-            # 如果发送缓冲区满，稍等再试（简单退避）
             time.sleep(0.01)
             self.req_sender.send_pyobj(req)
 
@@ -422,5 +642,3 @@ class SLDisaggregationSystem:
             self.shutdown()
         except Exception:
             pass
-
-    

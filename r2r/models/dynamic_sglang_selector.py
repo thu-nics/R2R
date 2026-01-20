@@ -7,7 +7,6 @@ import torch.distributed as dist
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
-    MODEL_DICT,
     QUICK_COLOR,
     REFERENCE_COLOR,
     RESET,
@@ -20,6 +19,7 @@ from r2r.utils.sampling import sample_token
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.server_args import PortArgs, ServerArgs
 
 
@@ -28,6 +28,7 @@ class DynamicSimpleSGLangSelector:
 
     def __init__(
         self,
+        model_config: dict,
         device: Optional[str] = "cuda",
         dtype: torch.dtype = torch.bfloat16,
         switching_strategy: str = "neural",
@@ -38,14 +39,15 @@ class DynamicSimpleSGLangSelector:
     ):
         self.device = device
         self.dtype = dtype
+        self.model_config = model_config
         self.strategy_kwargs = strategy_kwargs or {}
         self.switching_strategy_name = switching_strategy
         self.is_record = is_record
-        
+
         # Combine default with provided kwargs
         quick_sglang_kwargs = {**(sglang_kwargs or {})}
         reference_sglang_kwargs = {**(sglang_kwargs or {})}
-        
+
         self.num_gpus = reference_sglang_kwargs.get("tp_size", torch.cuda.device_count())
         self.world_size = self.num_gpus
 
@@ -53,20 +55,20 @@ class DynamicSimpleSGLangSelector:
         self.generation_records = {}
 
         # Currently only support tp_size=1 for quick model
-        quick_sglang_kwargs["tp_size"] = 1 
+        quick_sglang_kwargs["tp_size"] = 1
         reference_sglang_kwargs["tp_size"] = self.world_size
         assert self.num_gpus >= 2, f"Using {self.num_gpus} GPUs for SGLang, expected larger than 2."
         print(f"Using {self.num_gpus} GPUs for SGLang, with {self.world_size} for reference and 1 for quick.")
 
         # Initialize SGLang models
-        print(f"Loading quick model {MODEL_DICT['quick']['model_name']}...")
+        print(f"Loading quick model {self.model_config['quick']['model_path']}...")
 
         self.quick_server_args = ServerArgs(
-            model_path=MODEL_DICT["quick"]["model_path"], 
-            disable_cuda_graph=False, 
+            model_path=self.model_config["quick"]["model_path"],
+            disable_cuda_graph=False,
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["quick"]["mem_fraction_static"],
+            mem_fraction_static=self.model_config["quick"].get("mem_fraction_static", 0.9),
             **quick_sglang_kwargs,
         )
         quick_port_args = PortArgs.init_new(self.quick_server_args)
@@ -76,19 +78,21 @@ class DynamicSimpleSGLangSelector:
             gpu_id=1,
             tp_rank=0,
             dp_rank=0,
+            moe_ep_rank=0,
+            pp_rank=0,
         )
         # Load tokenizer
         self.tokenizer = self.quick_scheduler.tokenizer
         # # warm up the quick model
         self.warm_up_quick_model()
 
-        print(f"Loading reference model {MODEL_DICT['reference']['model_name']}...")
+        print(f"Loading reference model {self.model_config['reference']['model_path']}...")
         self.reference_server_args = ServerArgs(
-            model_path=MODEL_DICT["reference"]["model_path"],
-            disable_cuda_graph=True, 
+            model_path=self.model_config["reference"]["model_path"],
+            disable_cuda_graph=True,
             disable_overlap_schedule=True,
             disable_radix_cache=False,
-            mem_fraction_static=MODEL_DICT["reference"]["mem_fraction_static"],
+            mem_fraction_static=self.model_config["reference"].get("mem_fraction_static", 0.9),
             **reference_sglang_kwargs,
         )
 
@@ -112,6 +116,10 @@ class DynamicSimpleSGLangSelector:
         self.warm_up_reference_model()
 
         # Initialize switching strategy
+        # Get override_init_args from router config
+        router_config = self.model_config.get('router', {})
+        override_init_args = router_config.get('override_init_args', {})
+        self.strategy_kwargs["override_init_args"] = override_init_args
         self.switching_strategy = create_switching_strategy(
             switching_strategy, **self.strategy_kwargs
         )
@@ -144,7 +152,8 @@ class DynamicSimpleSGLangSelector:
                 stop=[]
             ),
             eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
-            return_hidden_states=True
+            return_hidden_states=True,
+            vocab_size=self.quick_scheduler.model_config.vocab_size
         )
         req.sampling_params.normalize(None)
         self.quick_scheduler.waiting_queue.append(req)
@@ -156,7 +165,7 @@ class DynamicSimpleSGLangSelector:
             next_token_ids = result.next_token_ids
             self.quick_scheduler.last_batch = batch
         for req in batch.reqs:
-            self.quick_scheduler.abort_request(req)
+            self.quick_scheduler.abort_request(AbortReq(req.rid))
             req.check_finished()
             if req.finished():
                 self.quick_scheduler.tree_cache.cache_finished_req(req)
@@ -180,6 +189,8 @@ class DynamicSimpleSGLangSelector:
             gpu_id=rank,
             tp_rank=rank,
             dp_rank=0,
+            moe_ep_rank=0,
+            pp_rank=0,
         )
 
         while True:
@@ -206,7 +217,9 @@ class DynamicSimpleSGLangSelector:
                 )
                 DynamicSimpleSGLangSelector.simple_prepare_for_extend(new_batch)
                 batch = new_batch.get_model_worker_batch()
-                _, next_token_ids = scheduler.tp_worker.forward_batch_generation(batch)
+                result = scheduler.tp_worker.forward_batch_generation(batch)
+                # sglang 0.5.1 returns (logits_output, next_token_ids, ...) - extract next_token_ids
+                next_token_ids = result[1] if isinstance(result, tuple) else result
                 next_token_ids_list = next_token_ids.tolist()
 
                 if rank == 0:
@@ -312,7 +325,8 @@ class DynamicSimpleSGLangSelector:
                 origin_input_ids=input_id,
                 sampling_params=sampling_params,
                 eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id, # noqa
-                return_hidden_states=False
+                return_hidden_states=False,
+                vocab_size=self.quick_scheduler.model_config.vocab_size
             )
             req.sampling_params.normalize(None) # disable str-based stop token
             req.prefix_indices = self.reference_prefix_indices_list[input_indices[i]]
@@ -371,7 +385,7 @@ class DynamicSimpleSGLangSelector:
 
         for req, next_token_id in zip(batch.reqs, next_token_ids):
             if next_token_id in self.quick_scheduler.model_config.hf_eos_token_id:
-                scheduler.abort_request(req)
+                scheduler.abort_request(AbortReq(req.rid))
             req.output_ids.append(next_token_id.item())
             req.check_finished()
             if req.finished():
@@ -449,7 +463,8 @@ class DynamicSimpleSGLangSelector:
                 origin_input_ids=input_id,
                 sampling_params=quick_sampling_params,
                 eos_token_ids=self.quick_scheduler.model_config.hf_eos_token_id,
-                return_hidden_states=True
+                return_hidden_states=True,
+                vocab_size=self.quick_scheduler.model_config.vocab_size
             )
             self.quick_scheduler.waiting_queue.append(req)
 
@@ -512,10 +527,10 @@ class DynamicSimpleSGLangSelector:
                         if model_choices[i].item() == 1:  # Use reference model
                             # update next token ids
                             source_model = "reference"
-                            param_size = float(MODEL_DICT["reference"]["param"])
+                            param_size = float(self.model_config["reference"]["param"])
                         else:  # Use quick model
                             source_model = "quick"
-                            param_size = float(MODEL_DICT["quick"]["param"])
+                            param_size = float(self.model_config["quick"]["param"])
 
                         token = next_token_ids[i].item()
                         token_str = self.tokenizer.decode(token)
@@ -564,7 +579,7 @@ class DynamicSimpleSGLangSelector:
                                 source_model="quick",
                                 position=position,
                                 batch_id=seq_idx,
-                                param_size=float(MODEL_DICT["quick"]["param"]),
+                                param_size=float(self.model_config["quick"]["param"]),
                             )
                         )
 
