@@ -103,7 +103,7 @@ def get_mem_fraction_statics(
 
     print(f"[SLDisaggregationSystem] overlap_tp_schedule=True, calculated mem_fraction_static: quick model {small_mem_fraction_static:.2f}, reference model {large_mem_fraction_static:.2f}, max num tokens is {total_token_num}")
 
-    return small_mem_fraction_static, large_mem_fraction_static
+    return small_mem_fraction_static, large_mem_fraction_static/(1-small_mem_fraction_static)
 
 
 class SLDisaggregationSystem:
@@ -174,7 +174,7 @@ class SLDisaggregationSystem:
         quick_sglang_kwargs["tp_size"] = self.quick_num_gpus
         reference_sglang_kwargs["tp_size"] = self.reference_num_gpus
         assert self.reference_num_gpus >= 1, f"Using {self.reference_num_gpus} GPUs for SGLang, expected larger than 1."
-        print(f"Using {self.reference_num_gpus+self.quick_num_gpus} GPUs for SGLang, with {self.quick_num_gpus} for quick.")
+        print(f"Using {self.reference_num_gpus+self.quick_num_gpus if overlap_tp_schedule is False else max(self.reference_num_gpus, self.quick_num_gpus)} GPUs for SGLang, with {self.quick_num_gpus} for quick.")
 
         # ZMQ PUB socket (broadcast producer) so all TP ranks receive the same message
         self.zmq_ctx = zmq.Context.instance()
