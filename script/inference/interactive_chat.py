@@ -311,7 +311,7 @@ def main():
                         help='Top-p for nucleus sampling.')
     parser.add_argument('--max-new-tokens', type=int, default=32768,
                         help='Maximum new tokens to generate.')
-    parser.add_argument('--neural-threshold', type=float, default=0.5,
+    parser.add_argument('--threshold', type=float, default=0.5,
                         help='Threshold for the neural switching strategy (default: 0.5).')
 
     args = parser.parse_args()
