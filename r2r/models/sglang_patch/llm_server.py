@@ -126,6 +126,10 @@ class LLMServer:
 
         print(f"Loading reference model {self.model_config['reference']['model_name']}...")
 
+        if reference_sglang_kwargs.get("attention_backend", None) != "flashinfer":
+            print(f"Only support flashinfer attention backend for reference model.")
+            reference_sglang_kwargs["attention_backend"] = "flashinfer"
+        
         reference_server_args = ServerArgs(
             model_path=self.model_config["reference"]["model_path"],
             disable_cuda_graph=False,
