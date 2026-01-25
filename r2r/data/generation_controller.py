@@ -17,6 +17,7 @@ from sglang.srt.hf_transformers_utils import get_tokenizer
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from r2r.data.utils.convert_eos_tokens import save_semantic_tokens_config
 from r2r.data.data_process import MismatchPoint
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 # Add the parent directory to Python path before any other imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

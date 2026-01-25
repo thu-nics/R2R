@@ -12,6 +12,7 @@ import os
 from r2r.data.data_process import MismatchPoint
 from r2r.data.generation_controller import DivergePoint, ModelController
 from r2r.utils.config import MODEL_DICT
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 DIVERGENT_SIMPLE_SYSTEM_PROMPT = "You are a semantic comparison expert."
 

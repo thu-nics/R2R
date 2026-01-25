@@ -27,6 +27,7 @@ from r2r.evaluate.eval_utils import select_by_category, generate_cot_prompt, pre
 import multiprocessing as mp
 import warnings
 from r2r.utils.config import TOKEN_TYPE
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 # set numpy random seed
 np.random.seed(42)

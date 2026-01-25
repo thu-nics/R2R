@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 import sglang as sgl
 from r2r.utils.config import MODEL_DICT
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 # os.environ["HF_DATASETS_OFFLINE"] = "1"
 

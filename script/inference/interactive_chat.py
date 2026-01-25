@@ -13,6 +13,7 @@ import warnings
 from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
 import yaml
 from r2r.utils.config import QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")

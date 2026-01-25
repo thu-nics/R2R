@@ -16,6 +16,7 @@ from r2r.utils.config import (
     QUICK_COLOR, REFERENCE_COLOR, RESET, TOTAL_GPU_NUM,
     MODEL_DICT
 )
+import r2r.models.sglang_patch.sgl_engine_patcher
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
