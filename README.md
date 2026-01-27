@@ -128,7 +128,7 @@ See [Pretrained routers](#-pretrained-routers) for the full list of supported mo
 
 We provide an interactive example in `interactive_chat.py`. The main `DynamicSimpleSGLangSelector` class follows the SGLang offline Engine API and supports the `.generate()` method for getting responses.
 
-You can download the pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main) and place the file `default_router.pt` under `resource/` folder:
+You can use the provided config, or download the pre-trained router from [this link](https://huggingface.co/nics-efc/R2R_router/tree/main) and set `pretrained_model_name` in the config to the router's local path.:
 
 ```bash
 python script/inference/interactive_chat.py --config-path config/Qwen3-0.6B+Qwen3-8B.yaml
