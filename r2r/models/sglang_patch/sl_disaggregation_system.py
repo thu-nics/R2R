@@ -603,37 +603,39 @@ class SLDisaggregationSystem:
         """Shut down the SGLang engines to free resources"""
         # Broadcast shutdown to quick workers (all TP ranks receive it)
         try:
-            req = Req(
-                rid="SHUTDOWN",
-                origin_input_text="",
-                origin_input_ids=[],
-                sampling_params=SamplingParams(temperature=0.0, top_p=1.0, top_k=-1, max_new_tokens=1, stop=[]),
-                return_hidden_states=False,
-                status="SHUTDOWN",
-            )
-            self.req_sender.send_pyobj(req, flags=zmq.NOBLOCK)
+            # ...existing code...
+            self.req_sender.send_pyobj(Req(rid="SHUTDOWN", origin_input_text="", origin_input_ids=[], sampling_params=None, status="SHUTDOWN"))
         except Exception:
             pass
+
+        # Call shutdown on servers to clean up their processes and threads
+        if hasattr(self, "slm_server") and self.slm_server is not None:
+            self.slm_server.shutdown()
+        
+        if hasattr(self, "llm_server") and self.llm_server is not None:
+            self.llm_server.shutdown()
 
         # Optional: shutdown reference workers if they exist
         if hasattr(self, "reference_model_input_queues"):
-            try:
-                for q in self.reference_model_input_queues:
-                    q.put_nowait(-1)  # Termination signal
-            except Exception:
-                pass
+            # ...existing code...
+            pass
 
         # Stop finished-req SUB thread and close socket
         try:
-            if hasattr(self, "_finished_recv_stop"):
-                self._finished_recv_stop.set()
-            if hasattr(self, "_finished_recv_thread") and getattr(self, "_finished_recv_thread", None) is not None and self._finished_recv_thread.is_alive():
-                self._finished_recv_thread.join(timeout=2)
+            self._finished_recv_stop.set() # Set Event
+            # ...existing code...
         except Exception:
             pass
         try:
-            if hasattr(self, "_finished_sub") and self._finished_sub is not None:
-                self._finished_sub.close(0)
+            if hasattr(self, "req_sender") and self.req_sender is not None:
+                self.req_sender.close(linger=0)
+        except Exception:
+            pass
+        
+        # Destroy ZMQ context to release sockets
+        try:
+            if hasattr(self, "zmq_ctx") and self.zmq_ctx is not None:
+                self.zmq_ctx.term()
         except Exception:
             pass
 

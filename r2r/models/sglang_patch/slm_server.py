@@ -12,6 +12,7 @@ import signal
 import os
 import threading
 import queue
+import sys
 from multiprocessing import Value
 
 from sglang.srt.sampling.sampling_params import SamplingParams
@@ -225,6 +226,10 @@ class SLMServer:
         req_port: Optional[int] = None,
         llm_kvcache_size: Optional[Value] = None,
     ):
+        # Register signal handler to ensure finally block execution on terminate
+        def _worker_sig_handler(signum, frame):
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, _worker_sig_handler)
         
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)

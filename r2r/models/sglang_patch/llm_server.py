@@ -13,6 +13,8 @@ import socket
 import torch.distributed as dist
 import threading
 import queue
+import sys
+import traceback
 from transformers import AutoTokenizer
 from multiprocessing import Value
 
@@ -165,6 +167,10 @@ class LLMServer:
 
     @staticmethod
     def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, llm_kvcache_size: Optional[Value] = None):
+        # Register signal handler to ensure finally block execution on terminate
+        def _worker_sig_handler(signum, frame):
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, _worker_sig_handler)
         # Use a dedicated tcp init_method to avoid port collision with quick model's default 29500 store
         init_method = f"tcp://127.0.0.1:{master_port}"
         dist.init_process_group(backend='nccl', init_method=init_method, rank=rank, world_size=world_size)
@@ -243,6 +249,8 @@ class LLMServer:
                         break
                 except Exception:
                     pass
+        except (SystemExit, KeyboardInterrupt):
+            pass 
         except BaseException as e:
             # Any unexpected error -> exit loop to avoid orphaned NCCL workers
             print(f"[rank {rank}] reference worker fatal error: {e}. Exiting loop.")
