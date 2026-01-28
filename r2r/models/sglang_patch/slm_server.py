@@ -168,6 +168,10 @@ class SLMServer:
         )
         quick_server_args.tp_size = quick_num_gpus
 
+        router_args = self.model_config.get("router", {})
+        override_init_args = router_args.get("override_init_args", {})
+        self.strategy_kwargs["override_init_args"] = override_init_args
+        
         self.quick_model_procs = []
         for rank in range(quick_num_gpus):
             proc = mp.Process(
