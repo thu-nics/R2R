@@ -3,6 +3,7 @@ import torch
 import time
 import zmq
 import pickle
+import socket
 from tqdm import tqdm
 from typing import Optional, Tuple, Union, List, Dict
 import multiprocessing as mp
@@ -12,8 +13,18 @@ import threading
 import asyncio
 import os
 from multiprocessing import Value
+
+
+def find_free_port() -> int:
+    """Find and return a free port on the system."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
 os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "29500"
+os.environ["MASTER_PORT"] = str(find_free_port())
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.models.sglang_patch.slm_server import SLMServer
@@ -241,7 +252,7 @@ class SLDisaggregationSystem:
             reference_sglang_kwargs=reference_sglang_kwargs,
             quick_num_gpus=self.quick_num_gpus,
             reference_num_gpus=self.reference_num_gpus,
-            reference_master_port=29501,
+            reference_master_port=find_free_port(),
             ready_queue=self._llm_ready_queue,
             overlap_tp_schedule=overlap_tp_schedule,
             mem_fraction_static=large_mem_fraction_static,
