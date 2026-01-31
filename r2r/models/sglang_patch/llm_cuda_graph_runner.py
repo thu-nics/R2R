@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 import r2r.models.sglang_patch.flashinfer_cuda_graph
 
-PREFIX_LEN = 8
+PREFIX_LEN = 1
 
 class LLMCudaGraphRunner(CudaGraphRunner):
 
@@ -87,12 +87,19 @@ class LLMCudaGraphRunner(CudaGraphRunner):
 
         # Batch sizes to capture
         # self.capture_bs, self.compile_bs = get_batch_sizes_to_capture(model_runner)
-        self.capture_bs, self.compile_bs = [1, 2], []
+        self.capture_bs, self.compile_bs = [16], []
         log_info_on_rank0(logger, f"Capture cuda graph bs {self.capture_bs}")
         self.capture_forward_mode = ForwardMode.EXTEND
         self.capture_hidden_mode = CaptureHiddenMode.NULL
-        self.extend_num_tokens_per_bs = list(range(16, 0, -1))
-        self.max_extend_num_tokens_per_bs = max(self.extend_num_tokens_per_bs)
+        # self.extend_num_tokens_per_bs = list(range(48, 0, -1))
+        self.extend_num_tokens_per_bs = {
+            16: list(range(60, 0, -1)),
+        }
+        all_extend_tokens = []
+        for bs in self.extend_num_tokens_per_bs:
+            all_extend_tokens.extend(self.extend_num_tokens_per_bs[bs])
+        # self.extend_num_tokens_per_bs = list(range(max(all_extend_tokens), 0, -1))
+        self.max_extend_num_tokens_per_bs = max(all_extend_tokens)
         if model_runner.spec_algorithm.is_eagle():
             # if self.model_runner.is_draft_worker:
             #     raise RuntimeError("This should not happen")
@@ -196,9 +203,11 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             cuda_graph_bs = forward_batch.batch_size
             cuda_seq_len = forward_batch.extend_seq_lens
 
-        is_bs_supported = cuda_graph_bs in self.graphs # if self.disable_padding else cuda_graph_bs <= self.max_bs
+        is_bs_supported = cuda_graph_bs in self.graphs if self.disable_padding else cuda_graph_bs <= self.max_bs
         if is_bs_supported:
-            is_seq_len_supported = cuda_seq_len.sum() in self.extend_num_tokens_per_bs # all(seq_len in self.extend_num_tokens_per_bs for seq_len in cuda_seq_len)
+            index = bisect.bisect_left(self.capture_bs, cuda_graph_bs)
+            bs = self.capture_bs[index]
+            is_seq_len_supported = (cuda_seq_len.sum() + (bs - cuda_graph_bs)*self.seq_len_fill_value) in self.extend_num_tokens_per_bs[bs] # all(seq_len in self.extend_num_tokens_per_bs for seq_len in cuda_seq_len)
             is_bs_supported = is_bs_supported and is_seq_len_supported
 
         if self.require_mlp_sync:
@@ -401,7 +410,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
                 for i, bs in enumerate(capture_range):
                     if bs not in self.graphs:
                         self.graphs[bs] = {}
-                    for j, seq_len in enumerate(self.extend_num_tokens_per_bs):
+                    for j, seq_len in enumerate(self.extend_num_tokens_per_bs[bs]):
                         if seq_len < bs:
                             continue
                         if get_tensor_model_parallel_rank() == 0:
@@ -457,7 +466,9 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             index = bisect.bisect_left(self.capture_bs, raw_bs)
         bs = self.capture_bs[index]
         if bs != raw_bs:
-            self.seq_lens.fill_(self.seq_len_fill_value)
+            self.seq_lens.fill_(self.seq_len_fill_value + PREFIX_LEN)
+            self.extend_prefix_lens.fill_(PREFIX_LEN)
+            self.extend_seq_lens.fill_(self.seq_len_fill_value)
             self.out_cache_loc.zero_()
 
         # Common inputs
@@ -515,7 +526,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             forward_batch.spec_info,
             seq_lens_cpu=seq_lens_cpu,
             prefix_lens=self.extend_prefix_lens[:bs],
-            extend_seq_len=raw_num_token,
+            extend_seq_len=raw_num_token + (bs - raw_bs) * self.seq_len_fill_value,
         )
 
         # Store fields
@@ -523,6 +534,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
         self.raw_num_token = raw_num_token
         self.bs = bs
         self.seq_len = raw_seq_len
+        self.extend_seq_len_sum = raw_num_token + (bs - raw_bs) * self.seq_len_fill_value
 
     def replay(
         self,
@@ -538,7 +550,7 @@ class LLMCudaGraphRunner(CudaGraphRunner):
             self.positions[: self.raw_num_token].copy_(forward_batch.positions)
 
         # Replay
-        self.graphs[self.bs][self.raw_num_token].replay()
+        self.graphs[self.bs][self.extend_seq_len_sum].replay()
 
         output = self.output_buffers[self.bs]
         if isinstance(output, LogitsProcessorOutput):
