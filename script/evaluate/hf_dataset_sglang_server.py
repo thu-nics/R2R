@@ -663,6 +663,15 @@ def evaluate_problem(
                 run_time = end_time - start_time
             
         # Process results
+        # First, calculate all output tokens for speed calculation
+        batch_output_tokens = [len(tokenizer.encode(text)) for text in generated_texts]
+        total_batch_output_tokens = sum(batch_output_tokens)
+        
+        # Calculate batch-level speed (tokens/s)
+        batch_speed = None
+        if run_time is not None and run_time > 0:
+            batch_speed = total_batch_output_tokens / run_time
+        
         for j, (generated_text, item) in enumerate(zip(generated_texts, batch)):
             if '</think>' in generated_text:
                 final_answer = generated_text.split('</think>')[1]
@@ -679,7 +688,7 @@ def evaluate_problem(
             
             # Calculate token usage
             input_tokens = len(tokenizer.encode(prompts[j]))
-            output_tokens = len(tokenizer.encode(generated_text))
+            output_tokens = batch_output_tokens[j]  # Use pre-calculated value
             total_tokens = input_tokens + output_tokens
             
             if args.use_http_server:
@@ -694,7 +703,8 @@ def evaluate_problem(
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
                     "full_output": generated_text,
-                    "run_time": run_time
+                    "run_time": run_time,
+                    "speed_tokens_per_second": batch_speed
                 }
                 
                 # Add LLM percentage if available from HTTP server
@@ -745,7 +755,8 @@ def evaluate_problem(
                 "quick_source_agreement_percentage": quick_source_agreement_percentage,
                 "total_params_billions": total_params_billions,
                 "avg_params_billions": avg_params_billions,
-                "run_time": run_time
+                "run_time": run_time,
+                "speed_tokens_per_second": batch_speed
             }
             else:
                 result = {
@@ -758,7 +769,8 @@ def evaluate_problem(
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
                     "full_output": generated_text,
-                    "run_time": run_time
+                    "run_time": run_time,
+                    "speed_tokens_per_second": batch_speed
                 }
             
             # Add dataset-specific fields
@@ -906,6 +918,25 @@ def combine_results(output_dir: str) -> Dict:
     for col in ['input_tokens', 'output_tokens', 'total_tokens']:
         if col in combined_df.columns:
             stats[f'avg_{col}'] = float(combined_df[col].mean())
+    
+    # Calculate generation speed (tokens/s)
+    if 'output_tokens' in combined_df.columns and 'run_time' in combined_df.columns:
+        args_path = os.path.join(output_dir, 'args.json')
+        batch_size = 1
+        if os.path.exists(args_path):
+            try:
+                with open(args_path, 'r') as f:
+                    saved_args = json.load(f)
+                    batch_size = saved_args.get('batch_size', 1)
+            except Exception as e:
+                print(f"Warning: Could not read batch_size from args.json: {e}")
+        
+        valid_mask = combined_df['output_tokens'].notna() & combined_df['run_time'].notna()
+        if valid_mask.any():
+            total_output_tokens = combined_df.loc[valid_mask, 'output_tokens'].sum()
+            total_run_time = combined_df.loc[valid_mask, 'run_time'].sum() / batch_size
+            if total_run_time > 0:
+                stats['speed_tokens_per_second'] = float(total_output_tokens / total_run_time)
     
     return stats
 
@@ -1328,7 +1359,7 @@ def main():
             
             if stats:
                 print(stats)
-                stats_df = pd.DataFrame(stats, index=[0]).T
+                stats_df = pd.DataFrame(list(stats.items()), columns=['metric_name', 'value'])
                 stats_df.to_csv(f"{args.output_dir}/stats.csv", index=False)
             
             # Print comprehensive evaluation metrics
@@ -1383,7 +1414,7 @@ def main():
         
         if stats:
             print(stats)
-            stats_df = pd.DataFrame(stats, index=[0]).T
+            stats_df = pd.DataFrame(list(stats.items()), columns=['metric_name', 'value'])
             stats_df.to_csv(f"{args.output_dir}/stats.csv", index=False)
         
         if args.resume:
@@ -1451,6 +1482,7 @@ def write_to_file(output_path: str, result: Dict):
         f.write(f"Output tokens: {result.get('output_tokens', 'N/A')}\n")
         f.write(f"Total tokens: {result.get('total_tokens', 'N/A')}\n")
         f.write(f"Run time: {result.get('run_time', 'N/A')}\n")
+        f.write(f"Speed (tokens/s): {result.get('speed_tokens_per_second', 'N/A')}\n")
         f.write("\nFull output:\n")
         f.write(result['full_output'])
             
@@ -1487,6 +1519,7 @@ def write_to_csv(output_path: str, result: Dict):
         'output_tokens': result.get('output_tokens', None),
         'total_tokens': result.get('total_tokens', None),
         'run_time': result.get('run_time', None),
+        'speed_tokens_per_second': result.get('speed_tokens_per_second', None),
         'full_output': result['full_output']
     }])
     
