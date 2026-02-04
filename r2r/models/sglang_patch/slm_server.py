@@ -351,15 +351,15 @@ class SLMServer:
                         token=next_token_ids[:, None],
                     )
                     # Use switching strategy to decide which model to use for each input
-                    model_choices = router.route(model_outputs)
+                    model_choices = router.route(model_outputs).cpu()
                     # TODO: merge router into sglang
 
                     # Check if reference model is needed for any prompt
-                    reference_needed = torch.any(model_choices).item()
+                    reference_needed = torch.any(model_choices)
                     if reference_needed:
                         req_to_send = []
                         for i, req in enumerate(batch.reqs):
-                            if model_choices[i].item() == 1:
+                            if model_choices[i] == 1:
                                 # TODO: send origin input to LLM to prefill prefix only
                                 req.status = "notneed"
                                 new_token_ids = []
