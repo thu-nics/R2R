@@ -263,22 +263,53 @@ class SLMServer:
             scheduler.receive_from_system = None
 
         # Initialize switching strategy
-        router = create_switching_strategy(
-            switching_strategy, **strategy_kwargs
-        )
+        router = create_switching_strategy(switching_strategy, **strategy_kwargs)
 
         # Notify readiness after subscription
-        tokenizer = scheduler.tokenizer
         if ready_queue is not None:
             try:
-                ready_queue.put(("READY", rank, tokenizer if rank == 0 else None))
+                ready_queue.put(("READY", rank, scheduler.tokenizer if rank == 0 else None))
             except Exception as e:
                 print(f"SLMServer Failed to send tokenizer from rank {rank}: {e}")
 
         print(f"Quick model worker {rank} started, waiting for requests...")
 
-        pending_reqs: List[Req] = []
+        SLMServer.init_batch_not_need(scheduler)
+        pbar_dict = {}
 
+        # event_loop
+        try:
+            while True:
+                if inbound_queue is not None: # Process message from LLM
+                    llm_reqs = SLMServer.recv_reqs_from_llm(
+                        inbound_queue=inbound_queue,
+                        scheduler=scheduler,
+                    )
+                    if llm_reqs:
+                        SLMServer.process_result_from_llm(rank, scheduler, llm_reqs, finished_queue, outbound_queue)
+                
+                recv_reqs = SLMServer.recv_requests(scheduler)
+                ok = SLMServer.process_new_requests(recv_reqs, scheduler, rank, outbound_queue)
+                if ok is False:
+                    print(f"[quick rank{rank}] SHUTDOWN received, exiting...")
+                    break
+
+                batch = scheduler.get_next_batch_to_run()
+                if batch:
+                    result, req_to_send = SLMServer.run_batch(batch, scheduler, router)
+                    SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank, req_to_send)
+                    scheduler.last_batch=batch
+                    if rank == 0:
+                        SLMServer.update_tqdm(pbar_dict, batch, scheduler)
+        finally:
+            try:
+                if dist.is_initialized():
+                    dist.destroy_process_group()
+            except Exception as e:
+                print(f"[rank {rank}] destroy_process_group error: {e}")
+    
+    @staticmethod
+    def init_batch_not_need(scheduler: Scheduler):
         scheduler.batch_not_need = ScheduleBatch.init_new(
             [],
             scheduler.req_to_token_pool,
@@ -300,102 +331,6 @@ class SLMServer:
         scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
             scheduler.batch_not_need.device, non_blocking=True
         )
-        pbar_dict = {}
-
-        try:
-            while True:
-                if inbound_queue is not None: # Process message from LLM
-                    device = scheduler.batch_not_need.device
-                    llm_reqs = SLMServer.recv_reqs_from_llm(
-                        inbound_queue=inbound_queue,
-                        scheduler=scheduler,
-                    )
-                    if llm_reqs:
-                        SLMServer.process_result_from_llm(rank, scheduler, llm_reqs, finished_queue, outbound_queue)
-                
-                recv_reqs = SLMServer.recv_requests(scheduler)
-                ok = SLMServer.process_new_requests(recv_reqs, scheduler, rank, outbound_queue)
-                if ok is False:
-                    print(f"[quick rank{rank}] SHUTDOWN received, exiting...")
-                    break
-
-                batch = scheduler.get_next_batch_to_run()
-                if batch:
-                    result = scheduler.run_batch(batch)
-                    if rank == 0:
-                        # Refresh reasoning progress bars
-                        current_rids = set()
-                        for req in batch.reqs+scheduler.batch_not_need.reqs:
-                            if not req.display_progress:
-                                continue
-                            current_rids.add(req.rid)
-                            if req.rid not in pbar_dict:
-                                pbar_dict[req.rid] = tqdm(total=req.sampling_params.max_new_tokens, desc=f"Req {req.rid}", leave=False)
-                            
-                            pbar_dict[req.rid].n = len(req.output_ids)
-                            pbar_dict[req.rid].refresh()
-                        
-                        # Close progress bars for requests that are no longer in the batch
-                        finished_rids = [rid for rid in pbar_dict if rid not in current_rids]
-                        for rid in finished_rids:
-                            pbar_dict[rid].close()
-                            del pbar_dict[rid]
-
-                    
-                    # Generate with quick model to get hidden states
-                    batch, hidden_states, logits, next_token_ids = SLMServer.process_routing_input(batch, result)
-                    # Create a ModelOutputs object for switching strategy
-                    model_outputs = ModelOutputs(
-                        logits=logits,
-                        hidden_states=[hidden_states],  # dummy layer dimension
-                        token=next_token_ids[:, None],
-                    )
-                    # Use switching strategy to decide which model to use for each input
-                    model_choices = router.route(model_outputs).cpu()
-                    # TODO: merge router into sglang
-
-                    # Check if reference model is needed for any prompt
-                    reference_needed = torch.any(model_choices)
-                    if reference_needed:
-                        req_to_send = []
-                        for i, req in enumerate(batch.reqs):
-                            if model_choices[i] == 1:
-                                # TODO: send origin input to LLM to prefill prefix only
-                                req.status = "notneed"
-                                new_token_ids = []
-                                if req.last_llm_loc is None:
-                                    req.last_llm_loc = 0
-                                    new_token_ids = req.origin_input_ids
-                                new_token_ids = new_token_ids + req.output_ids[req.last_llm_loc:]
-                                req.last_llm_loc = len(req.output_ids)
-                                waiting_req=WaitingReq(
-                                    rid=req.rid, 
-                                    new_token_ids=new_token_ids, 
-                                    sampling_params=SimpleSamplingParams(
-                                        temperature = req.sampling_params.temperature, 
-                                        top_k = req.sampling_params.top_k, 
-                                        top_p = req.sampling_params.top_p, 
-                                        max_new_tokens = 1
-                                        )
-                                    )
-                                req_to_send.append(waiting_req)
-                        
-                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank)
-                        scheduler.check_batch_status(batch)
-                        scheduler.last_batch=batch
-                        if rank == 0:
-                            for waiting_req in req_to_send:
-                                outbound_queue.put_nowait(waiting_req)
-
-                    else:
-                        SLMServer.process_batch_results(batch, result, scheduler, finished_queue, outbound_queue, rank)
-                        scheduler.last_batch=batch
-        finally:
-            try:
-                if dist.is_initialized():
-                    dist.destroy_process_group()
-            except Exception as e:
-                print(f"[rank {rank}] destroy_process_group error: {e}")
     
     @staticmethod
     def recv_requests(scheduler: Scheduler) -> List[Req]:
@@ -658,14 +593,56 @@ class SLMServer:
             )
         return recv_reqs
 
+    @staticmethod
+    def run_batch(batch: ScheduleBatch, scheduler: Scheduler, router):
+        result = scheduler.run_batch(batch)
+        batch, hidden_states, logits, next_token_ids = SLMServer.process_routing_input(batch, result)
+        # Create a ModelOutputs object for switching strategy
+        model_outputs = ModelOutputs(
+            logits=logits,
+            hidden_states=[hidden_states],  # dummy layer dimension
+            token=next_token_ids[:, None],
+        )
+        # Use switching strategy to decide which model to use for each input
+        model_choices = router.route(model_outputs).cpu()
+        # TODO: merge router into sglang
+
+        # Check if reference model is needed for any prompt
+        reference_needed = torch.any(model_choices)
+        req_to_send = []
+        if reference_needed:
+            for i, req in enumerate(batch.reqs):
+                if model_choices[i] == 1:
+                    # TODO: send origin input to LLM to prefill prefix only
+                    req.status = "notneed"
+                    new_token_ids = []
+                    if req.last_llm_loc is None:
+                        req.last_llm_loc = 0
+                        new_token_ids = req.origin_input_ids
+                    new_token_ids = new_token_ids + req.output_ids[req.last_llm_loc:]
+                    req.last_llm_loc = len(req.output_ids)
+                    waiting_req=WaitingReq(
+                        rid=req.rid, 
+                        new_token_ids=new_token_ids, 
+                        sampling_params=SimpleSamplingParams(
+                            temperature = req.sampling_params.temperature, 
+                            top_k = req.sampling_params.top_k, 
+                            top_p = req.sampling_params.top_p, 
+                            max_new_tokens = 1
+                            )
+                        )
+                    req_to_send.append(waiting_req)
+        return result, req_to_send
+
+    @staticmethod
     def process_routing_input(batch: ScheduleBatch, result):
         device = batch.seq_lens.device
-        extend_lens = torch.tensor(batch.extend_lens, device=device)
         batch_size = batch.batch_size()
         is_prefill = (result.logits_output.hidden_states.shape[0] != batch_size)
 
         if is_prefill:
             # For prefill, use cumsum of extend_lens to get correct indices
+            extend_lens = torch.tensor(batch.extend_lens, device=device)
             hidden_indices = torch.cumsum(extend_lens, dim=0) - 1
         else:
             # For decode, use sequential indices
@@ -680,7 +657,8 @@ class SLMServer:
 
     # NOTE: original recv_requests removed in favor of central queue distribution.
     
-    def process_batch_results(batch: ScheduleBatch, result, scheduler: Scheduler, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, rank: int = 0):
+    @staticmethod
+    def process_batch_results(batch: ScheduleBatch, result, scheduler: Scheduler, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, rank: int = 0, req_to_send: Optional[List[WaitingReq]] = None):
         batch.output_ids = result.next_token_ids
         finished_reqs = []
 
@@ -702,8 +680,13 @@ class SLMServer:
         if len(finished_reqs) > 0:
             for req in finished_reqs:
                 scheduler.issued_reqs.remove(req)
+        if len(req_to_send) > 0:
+            scheduler.check_batch_status(batch)
+        if rank == 0:
+            for waiting_req in req_to_send:
+                outbound_queue.put_nowait(waiting_req)
 
-
+    @staticmethod
     def process_finished_requests(finished_reqs: List[Req], tokenizer, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
         """Process finished requests, e.g., logging or updating status."""
         for req in finished_reqs:
@@ -874,3 +857,23 @@ class SLMServer:
                 self.queue_to_llm.put(obj)
             except Exception:
                 pass
+
+    @staticmethod
+    def update_tqdm(pbar_dict: Dict[str, tqdm], batch: ScheduleBatch, scheduler: Scheduler):
+        # Refresh reasoning progress bars
+        current_rids = set()
+        for req in batch.reqs+scheduler.batch_not_need.reqs:
+            if not req.display_progress:
+                continue
+            current_rids.add(req.rid)
+            if req.rid not in pbar_dict:
+                pbar_dict[req.rid] = tqdm(total=req.sampling_params.max_new_tokens, desc=f"Req {req.rid}", leave=False)
+            
+            pbar_dict[req.rid].n = len(req.output_ids)
+            pbar_dict[req.rid].refresh()
+        
+        # Close progress bars for requests that are no longer in the batch
+        finished_rids = [rid for rid in pbar_dict if rid not in current_rids]
+        for rid in finished_rids:
+            pbar_dict[rid].close()
+            del pbar_dict[rid]

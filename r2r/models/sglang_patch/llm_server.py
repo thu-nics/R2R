@@ -188,39 +188,21 @@ class LLMServer:
             llm_kvcache_size=llm_kvcache_size,
         )
         print(f"[reference rank {rank}] attn_tp_rank: {scheduler.attn_tp_rank}")
-        tokenizer = scheduler.tokenizer
+        
         # Signal readiness
         if ready_queue is not None:
             try:
-                ready_queue.put(("READY", rank, tokenizer if rank == 0 else None))
+                ready_queue.put(("READY", rank, scheduler.tokenizer if rank == 0 else None))
             except Exception as e:
                 print(f"[rank {rank}] failed to put READY: {e}")
         
-        scheduler.batch_not_need = ScheduleBatch.init_new(
-            [],
-            scheduler.req_to_token_pool,
-            scheduler.token_to_kv_pool_allocator,
-            scheduler.tree_cache,
-            scheduler.model_config,
-            scheduler.enable_overlap,
-            scheduler.spec_algorithm,
-            scheduler.server_args.enable_custom_logit_processor,
-        )
-        LLMServer.simple_prepare_for_extend(scheduler.batch_not_need)
-        scheduler.batch_not_need.multimodal_inputs = []
-        scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
-            scheduler.batch_not_need.device, non_blocking=True
-        )
-        scheduler.batch_not_need.orig_seq_lens = torch.tensor([], dtype=torch.int64).to(
-            scheduler.batch_not_need.device, non_blocking=True
-        )
-
+        LLMServer.init_batch_not_need(scheduler)
         print(f"Reference model worker {rank} started, waiting for requests...")
         
+        # event_loop
         try:
             while True:
                 if inbound_queue is not None: # Process message from LLM
-                    device = scheduler.batch_not_need.device
                     slm_reqs = LLMServer.recv_reqs_from_slm(
                         inbound_queue=inbound_queue,
                         scheduler=scheduler,
@@ -262,6 +244,27 @@ class LLMServer:
                     dist.destroy_process_group()
             except Exception as e:
                 print(f"[rank {rank}] destroy_process_group/close socket error: {e}")
+    
+    @staticmethod
+    def init_batch_not_need(scheduler: Scheduler):
+        scheduler.batch_not_need = ScheduleBatch.init_new(
+            [],
+            scheduler.req_to_token_pool,
+            scheduler.token_to_kv_pool_allocator,
+            scheduler.tree_cache,
+            scheduler.model_config,
+            scheduler.enable_overlap,
+            scheduler.spec_algorithm,
+            scheduler.server_args.enable_custom_logit_processor,
+        )
+        LLMServer.simple_prepare_for_extend(scheduler.batch_not_need)
+        scheduler.batch_not_need.multimodal_inputs = []
+        scheduler.batch_not_need.output_ids = torch.tensor([], dtype=torch.int64).to(
+            scheduler.batch_not_need.device, non_blocking=True
+        )
+        scheduler.batch_not_need.orig_seq_lens = torch.tensor([], dtype=torch.int64).to(
+            scheduler.batch_not_need.device, non_blocking=True
+        )
 
     @staticmethod
     def process_result_from_slm(scheduler: Scheduler, commit_msgs):
