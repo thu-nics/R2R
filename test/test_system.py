@@ -27,7 +27,7 @@ def save_results_to_csv(csv_path: str, results: dict, append: bool = True):
     mode = 'a' if append else 'w'
     
     fieldnames = [
-        'timestamp', 'system', 'config_path', 'threshold',
+        'timestamp', 'system', 'config_path', 'threshold', 'batch_size',
         'input_tokens', 'output_tokens', 'total_time_s', 
         'decode_throughput_tps', 'quick_ratio', 'reference_ratio',
         'prompt', 'generated_text'
@@ -45,14 +45,20 @@ def save_results_to_csv(csv_path: str, results: dict, append: bool = True):
 def main():
     parser = argparse.ArgumentParser(description="Test SLDisaggregationSystem - Speed Test")
     parser.add_argument('--config-path', type=str, 
-                        default="config/local/DeepSeek-R1-Distill-Qwen-1.5B+DeepSeek-R1-Distill-Qwen-32B_local.yaml",
+                        default="config/DeepSeek-R1-Distill-Qwen-1.5B+DeepSeek-R1-Distill-Qwen-32B_local.yaml",
                         help='Path to config.yaml')
     parser.add_argument('--threshold', type=float, default=0.5,
                         help='Threshold for neural routing (fallback if not in config)')
     
     # Test parameters
+    parser.add_argument('--batch-size', type=int, default=16,
+                        help='Batch size for generation')
     parser.add_argument('--decode-length', type=int, default=8192,
                         help='Maximum number of tokens to decode/generate')
+    parser.add_argument('--slm-tp-size', type=int, default=1,
+                        help='TP size for SLM')
+    parser.add_argument('--llm-tp-size', type=int, default=1,
+                        help='TP size for LLM')
     
     # Sampling parameters
     parser.add_argument('--temperature', type=float, default=0.0,
@@ -86,8 +92,8 @@ def main():
     router_config = model_config.get("router", {})
     router_path = router_config.get("router_path")
 
-    quick_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1, "enable_return_hidden_states": True}
-    reference_sglang_kwargs = {"dtype": "bfloat16", "tp_size": 1}
+    quick_sglang_kwargs = {"dtype": "bfloat16", "tp_size": args.slm_tp_size, "enable_return_hidden_states": True}
+    reference_sglang_kwargs = {"dtype": "bfloat16", "tp_size": args.llm_tp_size}
     strategy_kwargs = {"model_path": router_path}
     
     # Determine switching strategy first
@@ -135,20 +141,24 @@ def main():
     input_file = os.path.join(os.path.dirname(__file__), "input_text.txt")
     if os.path.isfile(input_file):
         with open(input_file, "r", encoding="utf-8") as f:
-            prompt = f.read().strip()
+            prompts = [ln.strip() for ln in f.readlines() if ln.strip()]
+        prompts = prompts[:args.batch_size]
         print(f"Loaded prompt from {input_file}")
     else:
-        prompt = "Write a detailed essay about the history of artificial intelligence."
-        print(f"input_text.txt not found, using default prompt")
+        prompt = "Every morning Aya goes for a $9$-kilometer-long walk and stops at a coffee shop afterwards. When she walks at a constant speed of $s$ kilometers per hour, the walk takes her 4 hours, including $t$ minutes spent in the coffee shop. When she walks $s+2$ kilometers per hour, the walk takes her 2 hours and 24 minutes, including $t$ minutes spent in the coffee shop. Suppose Aya walks at $s+\frac{1}{2}$ kilometers per hour. Find the number of minutes the walk takes her, including the $t$ minutes spent in the coffee shop."
+        prompts = [prompt] * args.batch_size
+        print(f"input_text.txt not found, using default prompts")
     
-    # Prepare input ids (batch_size = 1)
-    messages = [{"role": "user", "content": prompt}]
-    prompt_text = generator.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    input_ids = generator.tokenizer.encode(prompt_text)
-    batch_input_ids = [input_ids]
+    # Prepare input ids
+    batch_input_ids = []
+    for prompt in prompts:
+        messages = [{"role": "user", "content": prompt}]
+        prompt_text = generator.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        input_ids = generator.tokenizer.encode(prompt_text)
+        batch_input_ids.append(input_ids)
     
-    input_length = len(input_ids)
-    print(f"Input Length: {input_length} tokens")
+    input_length = sum(len(input_ids) for input_ids in batch_input_ids) / len(batch_input_ids)
+    print(f"Average Input Length: {input_length} tokens")
     print(f"Max Decode Length: {args.decode_length} tokens")
     print("=" * 60)
 
@@ -207,7 +217,7 @@ def main():
         torch.cuda.synchronize()
         
         start_time = time.perf_counter()
-        
+        torch.cuda.cudart().cudaProfilerStart()
         result = generator.generate(
             batch_input_ids,
             max_new_tokens=args.decode_length,
@@ -218,27 +228,33 @@ def main():
         )
         
         torch.cuda.synchronize()
+        torch.cuda.cudart().cudaProfilerStop()
         end_time = time.perf_counter()
         
         iter_time = end_time - start_time
         benchmark_times.append(iter_time)
 
         # Calculate output tokens and get generated text
-        obj = result[0]
+        iter_output_tokens = 0
+        slm_token_count = 0
+        llm_token_count = 0
+        llm_ratio = 0.0
 
-        if isinstance(obj, dict):
-            iter_output_tokens = len(obj.get("output_ids", []))
-            output_ids = obj.get("output_ids", [])
-            slm_token_count = obj.get("slm_token_count", 0)
-            llm_token_count = obj.get("llm_token_count", 0)
-            llm_ratio = obj.get("llm_ratio", 0.0)
-        else:
-            iter_output_tokens = len(obj.output_ids)
-            output_ids = obj.output_ids
-            slm_token_count = getattr(obj, "slm_token_count", 0)
-            llm_token_count = getattr(obj, "llm_token_count", 0)
-            total = slm_token_count + llm_token_count
-            llm_ratio = llm_token_count / total if total > 0 else 0.0
+        for obj in result:
+
+            if isinstance(obj, dict):
+                iter_output_tokens += len(obj.get("output_ids", []))
+                output_ids = obj.get("output_ids", [])
+                slm_token_count += obj.get("slm_token_count", 0)
+                llm_token_count += obj.get("llm_token_count", 0)
+            else:
+                iter_output_tokens += len(obj.output_ids)
+                output_ids = obj.output_ids
+                slm_token_count += getattr(obj, "slm_token_count", 0)
+                llm_token_count += getattr(obj, "llm_token_count", 0)
+
+        total = slm_token_count + llm_token_count
+        llm_ratio = llm_token_count / total if total > 0 else 0.0
         
         benchmark_output_tokens.append(iter_output_tokens)
         all_slm_counts.append(slm_token_count)
@@ -299,6 +315,7 @@ def main():
             'system': 'SLDisaggregationSystem',
             'config_path': args.config_path,
             'threshold': threshold,
+            'batch_size': args.batch_size,
             'input_tokens': input_length,
             'output_tokens': output_tokens,
             'total_time_s': round(total_time, 3),
