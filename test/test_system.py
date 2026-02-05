@@ -164,19 +164,11 @@ def main():
 
     # Warm-up parameters
     warmup_iterations = 5
-    warmup_decode_length = 8192
     benchmark_iterations = 5
-
-    # Prepare dummy input for warm-up
-    dummy_prompt = "Hello, this is a warm-up test. Please generate some text."
-    dummy_messages = [{"role": "user", "content": dummy_prompt}]
-    dummy_prompt_text = generator.tokenizer.apply_chat_template(dummy_messages, tokenize=False, add_generation_prompt=True)
-    dummy_input_ids = generator.tokenizer.encode(dummy_prompt_text)
-    dummy_batch_input_ids = [dummy_input_ids]
 
     # Warm-up phase
     print(f"\n{'=' * 60}")
-    print(f"WARM-UP PHASE: {warmup_iterations} iterations x {warmup_decode_length} tokens")
+    print(f"WARM-UP PHASE: {warmup_iterations} iterations x {args.decode_length} tokens")
     print("=" * 60)
     
     for i in range(warmup_iterations):
@@ -184,9 +176,9 @@ def main():
         torch.cuda.synchronize()
         warmup_start = time.perf_counter()
         
-        generator.generate(
-            dummy_batch_input_ids,
-            max_new_tokens=warmup_decode_length,
+        result = generator.generate(
+            batch_input_ids,
+            max_new_tokens=args.decode_length,
             temperature=args.temperature,
             top_p=args.top_p,
             top_k=args.top_k,
