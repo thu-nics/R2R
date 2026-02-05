@@ -48,6 +48,7 @@ class SLMServer:
         strategy_kwargs: Dict = {},
         mem_fraction_static: Optional[float] = None,
         llm_kvcache_size: Optional[Value] = None,
+        master_port: Optional[int] = None,
     ):
         self.quick_waiting_line = []
         self.is_reset_cache = False
@@ -61,6 +62,7 @@ class SLMServer:
         self.ready_queue = ready_queue
         self.switching_strategy = switching_strategy
         self.strategy_kwargs = strategy_kwargs
+        self.master_port = master_port
         # Inter-server queues (outbound to LLM / inbound from LLM)
         self.queue_to_llm = mp.Queue()
         # Dedicated outbound sequence counter for messages sent to LLM
@@ -167,7 +169,7 @@ class SLMServer:
             **quick_sglang_kwargs,
         )
         quick_server_args.tp_size = quick_num_gpus
-
+        
         router_args = self.model_config.get("router", {})
         override_init_args = router_args.get("override_init_args", {})
         self.strategy_kwargs["override_init_args"] = override_init_args
@@ -188,6 +190,7 @@ class SLMServer:
                     self._finished_reqs_queue,  # finished reqs back to system
                     req_port if rank == 0 else None,  # system SUB only on rank 0
                     llm_kvcache_size,
+                    self.master_port,  # Pass master_port to worker
                 ),
             )
             proc.start()
@@ -229,11 +232,19 @@ class SLMServer:
         finished_queue: Optional[mp.Queue] = None,
         req_port: Optional[int] = None,
         llm_kvcache_size: Optional[Value] = None,
+        master_port: Optional[int] = None,
     ):
         # Register signal handler to ensure finally block execution on terminate
         def _worker_sig_handler(signum, frame):
             sys.exit(0)
         signal.signal(signal.SIGTERM, _worker_sig_handler)
+        
+        # Set MASTER_ADDR and MASTER_PORT inside worker
+        os.environ["MASTER_ADDR"] = "localhost"
+        if master_port is not None:
+            os.environ["MASTER_PORT"] = str(master_port)
+        elif "MASTER_PORT" not in os.environ:
+            raise RuntimeError("MASTER_PORT must be provided or set in environment")
         
         dist.init_process_group(backend='nccl', rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)

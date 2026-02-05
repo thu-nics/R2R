@@ -23,9 +23,6 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = str(find_free_port())
-
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.models.sglang_patch.slm_server import SLMServer
 from r2r.models.sglang_patch.llm_server import LLMServer
@@ -194,6 +191,10 @@ class SLDisaggregationSystem:
 
         self._quick_ready_queue = mp.Queue()
 
+        # Compute MASTER_PORT once in the main process and pass to workers
+        self.slm_master_port = find_free_port()
+        print(f"[SLDisaggregationSystem] SLM MASTER_ADDR: localhost, MASTER_PORT: {self.slm_master_port}")
+
         small_mem_fraction_static, large_mem_fraction_static = get_mem_fraction_statics(
             model_config=self.model_config,
             overlap_tp_schedule=overlap_tp_schedule,
@@ -227,6 +228,7 @@ class SLDisaggregationSystem:
             strategy_kwargs=self.strategy_kwargs,
             mem_fraction_static=small_mem_fraction_static,
             llm_kvcache_size=self.llm_kvcache_size,
+            master_port=self.slm_master_port,  # Pass master_port to SLMServer
         )
 
         try:
