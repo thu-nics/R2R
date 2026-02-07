@@ -339,7 +339,7 @@ class LLMServer:
                         break
                     except Exception:
                         break
-                    recv_reqs.append(item)
+                    recv_reqs.extend(item)
             else:
                 recv_reqs = None
         else:
@@ -520,21 +520,22 @@ class LLMServer:
     
     def process_batch_results(rank: int, batch: ScheduleBatch, result, scheduler: Scheduler, outbound_queue: Optional[mp.Queue] = None):
         batch.output_ids = result.next_token_ids
-        finished_reqs = []
         next_token_ids = result.next_token_ids.tolist()
+        req_to_send = []
 
         for req, next_token_id in zip(batch.reqs, next_token_ids):
             req.status = "notneed"
             waiting_req = WaitingReq(rid=req.rid,new_token_ids=[next_token_id],sampling_params=None)
-            if rank == 0:
+            req_to_send.append(waiting_req)
+        if rank == 0:
+            try:
+                outbound_queue.put_nowait(req_to_send)
+            except Exception:
+                # Fallback to blocking put if needed
                 try:
-                    outbound_queue.put_nowait(waiting_req)
+                    outbound_queue.put(req_to_send)
                 except Exception:
-                    # Fallback to blocking put if needed
-                    try:
-                        outbound_queue.put(waiting_req)
-                    except Exception:
-                        pass
+                    pass
     
     @staticmethod
     def simple_prepare_for_extend(batch: ScheduleBatch):

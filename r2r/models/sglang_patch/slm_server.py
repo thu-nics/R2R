@@ -204,13 +204,13 @@ class SLMServer:
             if req.status in ("SHUTDOWN", "RESET_CACHE"):
                 if req.status == "SHUTDOWN":
                     if rank == 0:
-                        outbound_queue.put_nowait(WaitingReq(status="SHUTDOWN",))
+                        outbound_queue.put_nowait([WaitingReq(status="SHUTDOWN",)])
                     return False
                 elif req.status == "RESET_CACHE":
                     ok = scheduler.flush_cache()
                     print(f"[quick rank{scheduler.gpu_id}] Cache reset: {ok}")
                     if rank == 0:
-                        outbound_queue.put_nowait(WaitingReq(rid=str(-1), new_token_ids=[], status="RESET_CACHE",))
+                        outbound_queue.put_nowait([WaitingReq(rid=str(-1), new_token_ids=[], status="RESET_CACHE",)])
                     continue
 
             req.eos_token_ids = scheduler.model_config.hf_eos_token_id
@@ -560,7 +560,7 @@ class SLMServer:
                         break
                     except Exception:
                         break
-                    recv_reqs.append(item)
+                    recv_reqs.extend(item)
             else:
                 recv_reqs = None
         else:
@@ -693,9 +693,8 @@ class SLMServer:
                 scheduler.issued_reqs.remove(req)
         if len(req_to_send) > 0:
             scheduler.check_batch_status(batch)
-        if rank == 0:
-            for waiting_req in req_to_send:
-                outbound_queue.put_nowait(waiting_req)
+            if rank == 0:
+                outbound_queue.put_nowait(req_to_send)
 
     @staticmethod
     def process_finished_requests(finished_reqs: List[Req], tokenizer, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
@@ -706,12 +705,12 @@ class SLMServer:
             #print(f"Bot: {tokenizer.decode(req.output_ids)}")
             #print("===")
             # Enqueue to system if queue is provided (send a lightweight serializable payload)
-            outbound_queue.put_nowait(WaitingReq(
+            outbound_queue.put_nowait([WaitingReq(
                 rid=req.rid, 
                 new_token_ids=[], 
                 sampling_params=SimpleSamplingParams(),
                 status="finished",
-            ))
+            )])
             if finished_queue is not None:
                 slm_count = getattr(req, 'slm_token_count', 0)
                 llm_count = getattr(req, 'llm_token_count', 0)
