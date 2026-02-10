@@ -71,6 +71,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[ChatCompletionChoice]
     usage: UsageInfo
+    llm_ratio: float
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -254,6 +255,7 @@ async def chat_completions(request: ChatCompletionRequest):
         output_ids = result.output_ids if hasattr(result, 'output_ids') else result.get('output_ids', [])
         output_text = system.tokenizer.decode(output_ids, skip_special_tokens=True)
         completion_tokens = len(output_ids)
+        llm_ratio = result.get('llm_ratio', None) if isinstance(result, dict) else getattr(result, 'llm_ratio', None)
         
         # Build OpenAI-compatible response
         response = ChatCompletionResponse(
@@ -271,7 +273,8 @@ async def chat_completions(request: ChatCompletionRequest):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens
-            )
+            ),
+            llm_ratio=llm_ratio,
         )
         
         return response
