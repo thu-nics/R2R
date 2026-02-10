@@ -87,13 +87,13 @@ class LLMCudaGraphRunner(CudaGraphRunner):
 
         # Batch sizes to capture
         # self.capture_bs, self.compile_bs = get_batch_sizes_to_capture(model_runner)
-        self.capture_bs, self.compile_bs = [16], []
+        self.capture_bs, self.compile_bs = [20], []
         log_info_on_rank0(logger, f"Capture cuda graph bs {self.capture_bs}")
         self.capture_forward_mode = ForwardMode.EXTEND
         self.capture_hidden_mode = CaptureHiddenMode.NULL
         # self.extend_num_tokens_per_bs = list(range(48, 0, -1))
         self.extend_num_tokens_per_bs = {
-            16: list(range(60, 0, -1)),
+            20: list(range(60, 0, -1)),
         }
         all_extend_tokens = []
         for bs in self.extend_num_tokens_per_bs:

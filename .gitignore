@@ -15,6 +15,7 @@
 !script/utils/configs/model_configs_qwen3_0_6b.json
 *.jsonl
 *.txt
+!test/input_text.txt
 *.log
 *.pth
 *.pyc
