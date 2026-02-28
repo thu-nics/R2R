@@ -1,8 +1,5 @@
 import os
 import sys
-os.environ['MASTER_ADDR'] = 'localhost'
-os.environ.setdefault('MASTER_PORT', '29506')
-os.environ['SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK'] = '1'
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -16,7 +13,10 @@ import math
 from tqdm import tqdm
 import argparse
 import yaml
-from r2r.models.dynamic_sglang_selector import DynamicSimpleSGLangSelector
+
+os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
+
+from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSystem
 from r2r.evaluate.eval_utils import get_answer_extractor, check_answer_correctness
 from r2r.evaluate.eval_utils import QUERY_TEMPLATE_MULTICHOICE, ANSWER_PATTERN_MULTICHOICE
 from r2r.evaluate.eval_utils import lcb_codegeneration_prompt_fn
@@ -34,6 +34,7 @@ np.random.seed(42)
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
+os.environ["SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 torch.set_warn_always(False)
 
@@ -74,11 +75,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate models on different datasets')
     
     # Model configuration
-    parser.add_argument('--model_path', type=str, 
-                      default='deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
-                      help='Path or name of the model to evaluate')
-    parser.add_argument('--model_param', type=float, default=1.5,
-                      help='Model parameter size in billions')
     parser.add_argument('--generator', type=str, default='sglang',
                       choices=['sglang'],
                       help='Generator for dynamic model selection')
@@ -96,8 +92,6 @@ def parse_args():
                       help='Batch size per GPU')
     parser.add_argument('--use_hybrid', action='store_true', default=False,
                       help='Use hybrid model processing (default: False)')
-    parser.add_argument('--mem_fraction_static', type=float, default=0.8,
-                        help='Fraction of GPU memory to allocate for judging')
     # Path configuration
     parser.add_argument('--output_dir', type=str, default=None,
                       help='Directory to save results (defaults to output/{dataset}_eval)')
@@ -114,7 +108,11 @@ def parse_args():
     parser.add_argument('--beam_size', type=int, default=3,
                       help='Beam size for tree-based generation')
     parser.add_argument('--tp_size', type=int, default=2, help='Number of tensor parallel GPUs')
+    parser.add_argument('--slm_tp_size', type=int, default=1, help='TP size for SLM (quick model)')
+    parser.add_argument('--llm_tp_size', type=int, default=1, help='TP size for LLM (reference model), defaults to tp_size')
     parser.add_argument('--dp_size', type=int, default=1, help='Number of data parallel GPUs')
+    parser.add_argument('--overlap_tp_schedule', action='store_true',
+                        help='Enable overlap TP schedule for SLDisaggregationSystem')
     # Debug configuration
     parser.add_argument('--debug', action='store_true',
                       help='Run in debug mode (only process first problem)')
@@ -139,6 +137,9 @@ def parse_args():
     
     parser.add_argument('--config-path', type=str, default=None,
                         help='Path to config.yaml containing router config')
+    parser.add_argument('--use_model', type=str, default=None,
+                        choices=['quick', 'reference'],
+                        help='Load model from config (quick or reference). Only effective when --use_hybrid is not set.')
     
     parser.add_argument('--reference_prob', type=float, default=0.5,
                       help='Probability of selecting the reference model')
@@ -160,6 +161,9 @@ def parse_args():
     
     args = parser.parse_args()
 
+    if args.llm_tp_size is None:
+        args.llm_tp_size = args.tp_size
+
     args.test_run_time = True
     
     # Load config from folder if provided
@@ -173,17 +177,26 @@ def parse_args():
         print(f"Loaded config from {config_path}")
     args.model_config = model_config
 
+    if model_config is None:
+        print("Error: --config-path must be provided.")
+        sys.exit(1)
+
     if args.use_hybrid:
-        if model_config is None:
-            print("Error: --use_hybrid requires --config-path to be provided.")
-            sys.exit(1)
-        quick_model_path = model_config['quick']['model_path']
-        if args.model_path == quick_model_path:
-            print(f"Using quick model: {args.model_path}")
-        else:
-            print(f"model path does not match the quick model path: {args.model_path} and {quick_model_path}, use quick model instead")
-            args.model_path = quick_model_path
-        
+        quick = model_config['quick']
+        args.model_path = quick['model_path']
+        args.model_param = float(quick.get('param', 0))
+        args.mem_fraction_static = float(quick.get('mem_fraction_static', 0.8))
+        print(f"Using hybrid mode, quick model: {args.model_path}")
+    elif args.use_model:
+        selected = model_config[args.use_model]
+        args.model_path = selected['model_path']
+        args.model_param = float(selected.get('param', 0))
+        args.mem_fraction_static = float(selected.get('mem_fraction_static', 0.8))
+        print(f"Using {args.use_model} model from config: {args.model_path} ({args.model_param}B)")
+    else:
+        print("Error: either --use_hybrid or --use_model must be specified.")
+        sys.exit(1)
+
     # Get dataset config
     dataset_config = DATASET_CONFIGS[args.dataset]
     
@@ -374,7 +387,9 @@ def process_with_model(
         elif switching_strategy == 'immediate':
             strategy_kwargs.update({
                 'model_path': router_path,
-                'aleatoric_threshold': router_config.get("aleatoric_threshold", args.threshold)
+                'aleatoric_threshold': router_config.get("aleatoric_threshold", args.threshold),
+                'epistemic_threshold': router_config.get("epistemic_threshold", args.threshold),
+                'entropy_threshold': router_config.get("entropy_threshold", args.threshold),
             })
         else:
             # For other strategies, possibly non-neural, check for specific thresholds in config
@@ -385,21 +400,26 @@ def process_with_model(
 
         # initialize generator
         kwargs_init = dict()
-        kwargs_generation = dict()
+        kwargs_generation = dict[Any, Any]()
 
         if args.generator == "sglang":
-            generator_class = DynamicSimpleSGLangSelector
             kwargs_init = {
-                "sglang_kwargs": {
+                "quick_sglang_kwargs": {
                     "dtype": "bfloat16",
-                    "tp_size": args.tp_size,
-                }
+                    "tp_size": args.slm_tp_size,
+                    "enable_return_hidden_states": True,
+                },
+                "reference_sglang_kwargs": {
+                    "dtype": "bfloat16",
+                    "tp_size": args.llm_tp_size,
+                },
+                "overlap_tp_schedule": args.overlap_tp_schedule,
             }
-            print(f"Using {args.tp_size} GPUs for SGLang")
+            print(f"Using {args.slm_tp_size} GPUs for SLM, {args.llm_tp_size} GPUs for LLM")
         else:
             raise ValueError(f"Invalid generator: {args.generator}")
         
-        generator = generator_class(
+        generator = SLDisaggregationSystem(
             model_config=model_config,
             device="cuda",
             dtype=torch.bfloat16,
@@ -453,7 +473,7 @@ def evaluate_problem(
     batch_size: int = 1,
     device: str = "cuda",
     use_hybrid: bool = False,
-    generator: DynamicSimpleSGLangSelector = None,
+    generator: SLDisaggregationSystem = None,
     test_run_time: bool = False,
     sampling_params: Dict = None,
     **kwargs_generation
@@ -504,26 +524,28 @@ def evaluate_problem(
 
         # Process each item in batch
         if use_hybrid:
-            # Generate with recording
-            # inputs = [generator.tokenizer.encode(prompt)[1:] for prompt in prompts] # noqa: skip BOS token
             inputs = [generator.tokenizer.encode(prompt) for prompt in prompts]
             if test_run_time:
                 start_time = time.time()
-            generated_texts, recorders = generator.generate(
+            gen_results = generator.generate(
                 inputs,
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
-                record_generation=True,
-                print_tokens=False,
-                **kwargs_generation
             )
             
-            # End timer and print duration
             if test_run_time:
                 end_time = time.time()
                 run_time = end_time - start_time
+
+            generated_texts = []
+            for obj in gen_results:
+                if isinstance(obj, dict):
+                    output_ids = obj.get("output_ids", [])
+                else:
+                    output_ids = obj.output_ids
+                generated_texts.append(generator.tokenizer.decode(output_ids, skip_special_tokens=True))
         else:            
             # Tokenize inputs
             inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(device)
@@ -571,23 +593,27 @@ def evaluate_problem(
             total_tokens = input_tokens + output_tokens
             
             if use_hybrid:
-                recorder = recorders[j]
-                stats = recorder.get_statistics()
-                print(f"Total tokens: {stats['total_tokens']}")
-                print(f"Quick model tokens: {stats['quick_model_tokens']} ({stats['quick_model_percentage']:.1f}%)")
-                print(f"Reference model tokens: {stats['reference_model_tokens']} ({stats['reference_model_percentage']:.1f}%)")
-                print(f"Overall model agreement: {stats['model_agreement_count']} tokens ({stats['model_agreement_percentage']:.1f}%)")
-                print(f"Quick source agreement: {stats['quick_source_agreement_count']}/{stats['quick_source_total']} tokens ({stats['quick_source_agreement_percentage']:.1f}%)")
-                print(f"Total parameters used: {stats['total_params_billions']:.1f}B")
-                print(f"Average parameters per token: {stats['avg_params_billions']:.1f}B")
-                
-                # Extract key statistics
-                quick_model_percentage = stats['quick_model_percentage']
-                reference_model_percentage = stats['reference_model_percentage']
-                model_agreement_percentage = stats['model_agreement_percentage']
-                quick_source_agreement_percentage = stats['quick_source_agreement_percentage']
-                total_params_billions = stats['total_params_billions']
-                avg_params_billions = stats['avg_params_billions']
+                obj = gen_results[j]
+                if isinstance(obj, dict):
+                    slm_token_count = obj.get("slm_token_count", 0)
+                    llm_token_count = obj.get("llm_token_count", 0)
+                else:
+                    slm_token_count = getattr(obj, "slm_token_count", 0)
+                    llm_token_count = getattr(obj, "llm_token_count", 0)
+                total_model_tokens = slm_token_count + llm_token_count
+                quick_model_percentage = (slm_token_count / total_model_tokens * 100) if total_model_tokens > 0 else 0
+                reference_model_percentage = (llm_token_count / total_model_tokens * 100) if total_model_tokens > 0 else 0
+
+                quick_param = float(args.model_config.get("quick", {}).get("param", 0))
+                ref_param = float(args.model_config.get("reference", {}).get("param", 0))
+                total_params_billions = slm_token_count * quick_param + llm_token_count * ref_param
+                avg_params_billions = total_params_billions / total_model_tokens if total_model_tokens > 0 else 0
+
+                print(f"Total tokens: {total_model_tokens}")
+                print(f"Quick model tokens: {slm_token_count} ({quick_model_percentage:.1f}%)")
+                print(f"Reference model tokens: {llm_token_count} ({reference_model_percentage:.1f}%)")
+                print(f"Total parameters used: {total_params_billions:.1f}B")
+                print(f"Average parameters per token: {avg_params_billions:.1f}B")
                 
                 result = {
                 "problem_id": item['ID'],
@@ -601,8 +627,8 @@ def evaluate_problem(
                 "full_output": generated_text,
                 "quick_model_percentage": quick_model_percentage,
                 "reference_model_percentage": reference_model_percentage,
-                "model_agreement_percentage": model_agreement_percentage,
-                "quick_source_agreement_percentage": quick_source_agreement_percentage,
+                "model_agreement_percentage": 0,
+                "quick_source_agreement_percentage": 0,
                 "total_params_billions": total_params_billions,
                 "avg_params_billions": avg_params_billions,
                 "run_time": run_time,

@@ -45,21 +45,36 @@ class ModelSwitchingStrategy:
 class ImmediateSwitching(ModelSwitchingStrategy):
     
     def __init__(
-        self, model_path: Optional[str] = None, aleatoric_threshold: Optional[float] = None, device: str = "cuda", dtype=torch.float32, override_init_args: Optional[dict] = None, **kwargs
+        self, model_path: Optional[str] = None,
+        aleatoric_threshold: Optional[float] = None,
+        epistemic_threshold: Optional[float] = None,
+        entropy_threshold: Optional[float] = None,
+        device: str = "cuda", dtype=torch.float32,
+        override_init_args: Optional[dict] = None, **kwargs
     ):
-        """Simple immediate switching based on aleatoric threshold"""
+        """Immediate switching based on aleatoric, epistemic, and entropy thresholds.
+        Routes to reference model only when ALL provided thresholds are exceeded."""
         super().__init__()  # Initialize parent class to set up self.state
         
-        # Use aleatoric_threshold if provided, otherwise default
-        if aleatoric_threshold is not None:
-            self.threshold = float(aleatoric_threshold)
-        else:
-            self.threshold = 2.275 
-        print(f"Using aleatoric threshold: {self.threshold}")
+        self.aleatoric_threshold = float(aleatoric_threshold) if aleatoric_threshold is not None else None
+        self.epistemic_threshold = float(epistemic_threshold) if epistemic_threshold is not None else None
+        self.entropy_threshold = float(entropy_threshold) if entropy_threshold is not None else None
+
+        active = {k: v for k, v in {
+            "aleatoric": self.aleatoric_threshold,
+            "epistemic": self.epistemic_threshold,
+            "entropy": self.entropy_threshold,
+        }.items() if v is not None}
+        if not active:
+            self.aleatoric_threshold = 2.275
+            active["aleatoric"] = self.aleatoric_threshold
+
+        print(f"ImmediateSwitching thresholds: {active}")
     
     def route(self, outputs) -> torch.Tensor:
         """
         Determine which model to use for each input in the batch.
+        Routes to reference (1) only when ALL active thresholds are exceeded.
         Args:
             outputs: Model outputs from the quick model
         Returns:
@@ -70,15 +85,22 @@ class ImmediateSwitching(ModelSwitchingStrategy):
         batch_size = outputs.logits.shape[0]
         next_token_logits = outputs.logits[:, -1, :]  # [batch_size, vocab_size]
         
-        # Compute uncertainty for each sample in the batch
         model_choices = torch.zeros(batch_size, dtype=torch.int, device=next_token_logits.device)
         
         for i in range(batch_size):
-            aleatoric_uncertainty, _ = compute_logu(next_token_logits[i:i+1])
-            # 0 = quick (low uncertainty), 1 = reference (high uncertainty)
-            model_choices[i] = 0 if aleatoric_uncertainty < self.threshold else 1
+            aleatoric, epistemic = compute_logu(next_token_logits[i:i+1])
+            entropy = compute_entropy(next_token_logits[i:i+1])
+            
+            use_reference = True
+            if self.aleatoric_threshold is not None and aleatoric < self.aleatoric_threshold:
+                use_reference = False
+            if self.epistemic_threshold is not None and epistemic < self.epistemic_threshold:
+                use_reference = False
+            if self.entropy_threshold is not None and entropy < self.entropy_threshold:
+                use_reference = False
+            
+            model_choices[i] = 1 if use_reference else 0
         
-        # Update state based on batch decisions
         self.state.last_model = "reference" if model_choices.any().item() else "quick"
         return model_choices
 
