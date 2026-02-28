@@ -1,18 +1,19 @@
 import os
 import sys
+import time
+import math
+import yaml
+import json
 import torch
+import argparse
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
+from datetime import datetime
+from datasets import load_dataset
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
-import pandas as pd
-import json
 from typing import Dict, List, Tuple, Callable, Any, Optional
-import numpy as np
-from datetime import datetime
-import math
-from tqdm import tqdm
-import argparse
-import yaml
 
 os.environ["SGLANG_ENABLE_TORCH_COMPILE"] = "0"
 
@@ -20,14 +21,14 @@ from r2r.models.sglang_patch.sl_disaggregation_system import SLDisaggregationSys
 from r2r.evaluate.eval_utils import get_answer_extractor, check_answer_correctness
 from r2r.evaluate.eval_utils import QUERY_TEMPLATE_MULTICHOICE, ANSWER_PATTERN_MULTICHOICE
 from r2r.evaluate.eval_utils import lcb_codegeneration_prompt_fn
-import time
-import sglang as sgl
-from sglang.srt.hf_transformers_utils import get_tokenizer
 from r2r.evaluate.eval_utils import select_by_category, generate_cot_prompt, preprocess
-import multiprocessing as mp
-import warnings
 from r2r.utils.config import TOKEN_TYPE
 import r2r.models.sglang_patch.sgl_engine_patcher
+
+import sglang as sgl
+from sglang.srt.hf_transformers_utils import get_tokenizer
+import multiprocessing as mp
+import warnings
 
 # set numpy random seed
 np.random.seed(42)
@@ -92,6 +93,9 @@ def parse_args():
                       help='Batch size per GPU')
     parser.add_argument('--use_hybrid', action='store_true', default=False,
                       help='Use hybrid model processing (default: False)')
+    parser.add_argument('--use_model', type=str, default=None,
+                        choices=['quick', 'reference'],
+                        help='Load model from config (quick or reference). Only effective when --use_hybrid is not set.')
     # Path configuration
     parser.add_argument('--output_dir', type=str, default=None,
                       help='Directory to save results (defaults to output/{dataset}_eval)')
@@ -105,12 +109,12 @@ def parse_args():
                       help='Top-p for the model')
     parser.add_argument('--top_k', type=int, default=-1,
                     help='Top-k filtering parameter for sampling (default: -1)')
-    parser.add_argument('--beam_size', type=int, default=3,
-                      help='Beam size for tree-based generation')
+
+    parser.add_argument('--dp_size', type=int, default=1, help='Number of data parallel GPUs')
     parser.add_argument('--tp_size', type=int, default=2, help='Number of tensor parallel GPUs')
+    
     parser.add_argument('--slm_tp_size', type=int, default=1, help='TP size for SLM (quick model)')
     parser.add_argument('--llm_tp_size', type=int, default=1, help='TP size for LLM (reference model), defaults to tp_size')
-    parser.add_argument('--dp_size', type=int, default=1, help='Number of data parallel GPUs')
     parser.add_argument('--overlap_tp_schedule', action='store_true',
                         help='Enable overlap TP schedule for SLDisaggregationSystem')
     # Debug configuration
@@ -137,9 +141,7 @@ def parse_args():
     
     parser.add_argument('--config-path', type=str, default=None,
                         help='Path to config.yaml containing router config')
-    parser.add_argument('--use_model', type=str, default=None,
-                        choices=['quick', 'reference'],
-                        help='Load model from config (quick or reference). Only effective when --use_hybrid is not set.')
+
     
     parser.add_argument('--reference_prob', type=float, default=0.5,
                       help='Probability of selecting the reference model')
@@ -160,9 +162,6 @@ def parse_args():
                       help='Number of times to repeat each input in batch dimension')
     
     args = parser.parse_args()
-
-    if args.llm_tp_size is None:
-        args.llm_tp_size = args.tp_size
 
     args.test_run_time = True
     
@@ -323,6 +322,7 @@ def process_with_model(
     generator = None
     kwargs_generation = dict()
     sampling_params = dict()
+    
     if use_hybrid:
         model = None
         # Prepare strategy kwargs based on the selected strategy
@@ -437,7 +437,7 @@ def process_with_model(
             mem_fraction_static=args.mem_fraction_static,
             skip_tokenizer_init=False,
             tp_size=args.tp_size,
-            dp_size=args.dp_size
+            dp_size=args.dp_size,
         )
         sampling_params = {
             "max_new_tokens": args.max_new_tokens,
