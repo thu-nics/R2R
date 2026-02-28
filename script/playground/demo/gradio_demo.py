@@ -1104,7 +1104,7 @@ def create_demo(r2r_client: R2RSubprocessClient, single_llm_client: SingleLLMSub
                 
                 # R2R output with colored text
                 r2r_output = gr.HTML(
-                    value="<div style='min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;'></div>",
+                    value="<div id='r2r-output-container' style='min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;'></div>",
                 )
                 
                 r2r_stats = gr.Textbox(
@@ -1126,7 +1126,7 @@ def create_demo(r2r_client: R2RSubprocessClient, single_llm_client: SingleLLMSub
                 
                 # Single LLM output
                 llm_output = gr.HTML(
-                    value="<div style='min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fffbeb; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;'></div>",
+                    value="<div id='llm-output-container' style='min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;'></div>",
                 )
                 
                 llm_stats = gr.Textbox(
@@ -1138,21 +1138,40 @@ def create_demo(r2r_client: R2RSubprocessClient, single_llm_client: SingleLLMSub
         gr.Markdown("---")
         
         # Helper functions
+        # Use the same background color for both panels
+        OUTPUT_PANEL_BG = "#f8fafc"  # Light gray-blue, neutral for both panels
+        
         def format_r2r_output(html_content):
-            """Wrap R2R HTML content in a styled container."""
-            base_style = "min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;"
+            """Wrap R2R HTML content in a styled container with auto-scroll."""
+            base_style = f"min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: {OUTPUT_PANEL_BG}; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;"
+            container_id = "r2r-output-container"
             if not html_content:
-                return f"<div style='{base_style}'></div>"
-            return f"<div style='{base_style}'>{html_content}</div>"
+                return f"<div id='{container_id}' style='{base_style}'></div>"
+            # Add auto-scroll script that runs after content updates
+            scroll_script = f"""<script>
+(function() {{
+    var el = document.getElementById('{container_id}');
+    if (el) {{ el.scrollTop = el.scrollHeight; }}
+}})();
+</script>"""
+            return f"<div id='{container_id}' style='{base_style}'>{html_content}</div>{scroll_script}"
         
         def format_llm_output(text_content):
-            """Wrap LLM text content in a styled container."""
-            base_style = "min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fffbeb; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;"
+            """Wrap LLM text content in a styled container with auto-scroll."""
+            base_style = f"min-height: 300px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: {OUTPUT_PANEL_BG}; font-family: inherit; white-space: pre-wrap; overflow-y: auto; max-height: 500px; font-size: 16px; line-height: 1.6;"
+            container_id = "llm-output-container"
             if not text_content:
-                return f"<div style='{base_style}'></div>"
+                return f"<div id='{container_id}' style='{base_style}'></div>"
             # Escape HTML and convert newlines
             escaped = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-            return f"<div style='{base_style}'>{escaped}</div>"
+            # Add auto-scroll script that runs after content updates
+            scroll_script = f"""<script>
+(function() {{
+    var el = document.getElementById('{container_id}');
+    if (el) {{ el.scrollTop = el.scrollHeight; }}
+}})();
+</script>"""
+            return f"<div id='{container_id}' style='{base_style}'>{escaped}</div>{scroll_script}"
         
         def respond_r2r_formatted(user_input: str, threshold: float):
             """Handle R2R generation with formatted HTML output."""
