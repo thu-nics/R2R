@@ -17,6 +17,7 @@ import sys
 import traceback
 from transformers import AutoTokenizer
 from multiprocessing import Value
+import nvtx
 
 from r2r.models.recorder import GenerationRecord, GenerationRecorder
 from r2r.utils.config import (
@@ -51,6 +52,7 @@ class LLMServer:
         overlap_tp_schedule: bool = False,
         mem_fraction_static: Optional[float] = None,
         llm_kvcache_size: Optional[Value] = None,
+        min_batch_size: Union[int, list[int]] = 1,
     ):
         self.is_reset_cache = False
         self.shutdown_loop = False
@@ -158,7 +160,9 @@ class LLMServer:
                     self.ready_queue,
                     self._inbound_queues, 
                     self.queue_to_slm,
-                    self.llm_kvcache_size if rank == 0 else None),
+                    self.llm_kvcache_size if rank == 0 else None,
+                    min_batch_size,
+                ),
             )
             # Mark as daemon so that workers die when parent exits unexpectedly
             proc.daemon = True
@@ -166,7 +170,7 @@ class LLMServer:
             self.reference_model_procs.append(proc)
 
     @staticmethod
-    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, llm_kvcache_size: Optional[Value] = None):
+    def reference_model_worker(rank, quick_num_gpus: int, world_size: int, server_args: ServerArgs, master_port: int = 29500, ready_queue: Optional[mp.Queue] = None, inbound_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, llm_kvcache_size: Optional[Value] = None, min_batch_size: Union[int, list[int]] = 1):
         # Register signal handler to ensure finally block execution on terminate
         def _worker_sig_handler(signum, frame):
             sys.exit(0)
@@ -186,6 +190,7 @@ class LLMServer:
             moe_ep_rank=0,
             pp_rank=0, # Pipeline parallelism is not Supported
             llm_kvcache_size=llm_kvcache_size,
+            min_batch_size=min_batch_size,
         )
         print(f"[reference rank {rank}] attn_tp_rank: {scheduler.attn_tp_rank}")
         
@@ -220,11 +225,14 @@ class LLMServer:
                         LLMServer.process_result_from_slm(scheduler, slm_reqs)
 
                 # For LLM, there is no need to process new reqs from rank_queue
+                if scheduler.waiting_queue:
+                    nvtx.push_range("LLM")
                 batch = scheduler.get_next_batch_to_run()
                 if batch:
                     result = scheduler.run_batch(batch)
                     LLMServer.process_batch_results(rank, batch, result, scheduler, outbound_queue)
                     scheduler.last_batch = batch
+                    nvtx.pop_range()
                 try:
                     if os.getppid() == 1:
                         print(f"[rank {rank}] parent process disappeared, exiting worker.")
@@ -280,8 +288,10 @@ class LLMServer:
             returned_rid_list.append(waiting_req.rid)
             if waiting_req.status == "finished":
                 finished_rid_list.add(waiting_req.rid)
+                scheduler.n_active_reqs -= 1
                 continue
             if waiting_req.rid not in req_already_prefilled:
+                scheduler.n_active_reqs += 1
                 origin_input_ids = waiting_req.new_token_ids
                 origin_input_text = scheduler.tokenizer.decode(origin_input_ids)
                 new_req = Req(

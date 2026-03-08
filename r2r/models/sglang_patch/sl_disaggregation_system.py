@@ -100,7 +100,7 @@ def get_mem_fraction_statics(
     large_bytes = torch.tensor([], dtype=large_model_config.dtype).element_size()
     large_model_mem = large_bytes * float(model_config["reference"]["param"]) # in GB
     total_gpu_memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(max(quick_num_gpus,reference_num_gpus))) / (1 << 30) # in GB
-    available_gpu_memory = (total_gpu_memory * 0.95 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus))
+    available_gpu_memory = (total_gpu_memory * 0.85 - (small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus))
 
     assert available_gpu_memory >= 0, f"Not enough GPU memory for both models: total {total_gpu_memory} GB, used {small_model_mem / quick_num_gpus + large_model_mem / reference_num_gpus} GB"
 
@@ -129,6 +129,7 @@ class SLDisaggregationSystem:
         reference_sglang_kwargs: Optional[dict] = None,
         is_logits_processor: bool = True,
         overlap_tp_schedule: bool = False,
+        llm_min_batch_size: Union[int, list[int]] = 1,
     ):
         """Initialize the SL Disaggregation System for dynamic model selection.
 
@@ -259,6 +260,7 @@ class SLDisaggregationSystem:
             overlap_tp_schedule=overlap_tp_schedule,
             mem_fraction_static=large_mem_fraction_static,
             llm_kvcache_size=self.llm_kvcache_size,
+            min_batch_size=llm_min_batch_size,
         )
 
         try:

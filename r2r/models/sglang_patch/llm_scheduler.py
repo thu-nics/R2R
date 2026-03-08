@@ -174,6 +174,7 @@ class LLMScheduler(Scheduler):
         dp_rank: Optional[int],
         dp_balance_meta: Optional[DPBalanceMeta] = None,
         llm_kvcache_size: Optional[Value] = None,
+        min_batch_size: Union[int, list[int]] = 1,
     ):
         # Parse args
         self.server_args = server_args
@@ -203,7 +204,8 @@ class LLMScheduler(Scheduler):
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
         self.page_size = server_args.page_size
-
+        self.min_batch_size = min_batch_size
+        self.n_active_reqs = 0
         self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
             compute_dp_attention_world_info(
                 server_args.enable_dp_attention,
@@ -606,7 +608,10 @@ class LLMScheduler(Scheduler):
 
         # Update waiting queue
         can_run_list: List[Req] = adder.can_run_list
-        if len(can_run_list) == 0:
+        min_batch_size = 1
+        if hasattr(self, "n_active_reqs") and isinstance(self.min_batch_size, list):
+            min_batch_size = self.min_batch_size[self.n_active_reqs - 1]
+        if len(can_run_list) < min_batch_size:
             return None
 
         if self.enable_metrics:

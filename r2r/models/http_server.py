@@ -133,7 +133,8 @@ async def lifespan(app: FastAPI):
                 strategy_kwargs=strategy_kwargs,
                 quick_sglang_kwargs=quick_sglang_kwargs,
                 reference_sglang_kwargs=reference_sglang_kwargs,
-                overlap_tp_schedule=server_args.overlap_tp_schedule
+                overlap_tp_schedule=server_args.overlap_tp_schedule,
+                llm_min_batch_size=server_args.llm_min_batch_size,
             )
             print("System initialized successfully.")
         except Exception as e:

@@ -14,6 +14,7 @@ import threading
 import queue
 import sys
 from multiprocessing import Value
+import nvtx
 
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, ForwardMode, SamplingBatchInfo, write_req_to_token_pool_triton
@@ -291,12 +292,15 @@ class SLMServer:
         # event_loop
         try:
             while True:
+                init_nvtx = False
                 if inbound_queue is not None: # Process message from LLM
                     llm_reqs = SLMServer.recv_reqs_from_llm(
                         inbound_queue=inbound_queue,
                         scheduler=scheduler,
                     )
                     if llm_reqs:
+                        nvtx.push_range("SLM")
+                        init_nvtx = True
                         SLMServer.process_result_from_llm(rank, scheduler, llm_reqs, finished_queue, outbound_queue)
                 
                 recv_reqs = SLMServer.recv_requests(scheduler)
@@ -305,6 +309,8 @@ class SLMServer:
                     print(f"[quick rank{rank}] SHUTDOWN received, exiting...")
                     break
 
+                if scheduler.waiting_queue or any(req.status == "need" for req in scheduler.batch_not_need.reqs) or (scheduler.last_batch and any(req.status == "need" for req in scheduler.last_batch.reqs)) and not init_nvtx:
+                    nvtx.push_range("SLM")
                 batch = scheduler.get_next_batch_to_run()
                 if batch:
                     result, req_to_send = SLMServer.run_batch(batch, scheduler, router)
@@ -312,6 +318,7 @@ class SLMServer:
                     scheduler.last_batch=batch
                     if rank == 0:
                         SLMServer.update_tqdm(pbar_dict, batch, scheduler)
+                    nvtx.pop_range()
         finally:
             try:
                 if dist.is_initialized():
@@ -415,6 +422,8 @@ class SLMServer:
 
     @staticmethod
     def process_result_from_llm(rank: int, scheduler: Scheduler, commit_msgs, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
+        if rank == 0 and hasattr(scheduler, "n_generated_tokens"):
+            scheduler.n_generated_tokens += len(commit_msgs)
         better_token_ids = {}
         returned_rid_list = []
         for waiting_req in commit_msgs:
@@ -670,6 +679,17 @@ class SLMServer:
     
     @staticmethod
     def process_batch_results(batch: ScheduleBatch, result, scheduler: Scheduler, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None, rank: int = 0, req_to_send: Optional[List[WaitingReq]] = None):
+        if rank == 0:
+            if not hasattr(scheduler, "last_status_time"):
+                scheduler.last_status_time = time.perf_counter()
+            if not hasattr(scheduler, "n_generated_tokens"):
+                scheduler.n_generated_tokens = 0
+            scheduler.n_generated_tokens += batch.batch_size() - len(req_to_send)
+            gap_latency = time.perf_counter() - scheduler.last_status_time
+            if gap_latency > 4.0:
+                print(f"[quick rank{rank}] throughput: {scheduler.n_generated_tokens / gap_latency:.2f} tokens/s")
+                scheduler.n_generated_tokens = 0
+                scheduler.last_status_time = time.perf_counter()
         batch.output_ids = result.next_token_ids
         finished_reqs = []
 
