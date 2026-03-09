@@ -191,7 +191,7 @@ async def generate_request(obj: GenerateReqInput):
             "text": output_text,
             "input_ids": input_ids,
             "output_ids": output_ids,
-            "llm_percentage": result.get('llm_percentage', None) if isinstance(result, dict) else None
+            "llm_ratio": result.get('llm_ratio', None) if isinstance(result, dict) else None
         }
 
     except Exception as e:
