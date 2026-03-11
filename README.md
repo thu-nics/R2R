@@ -91,7 +91,7 @@ R2R is fully compatible with SGLang chat completion API. Simply:
 python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml --port 30000
 ```
 
-2. Send requests with any Open-AI compatible API. 
+2. Send requests with any Open-AI compatible API. An example is shown in `script/playground/simple_req.py`
 
 ```python
 import requests
@@ -153,6 +153,18 @@ python script/playground/speed_benchmark.py --test_r2r --router_path resource/de
 # SLM/LLM speed benchmark
 python script/playground/speed_benchmark.py --test_slm
 python script/playground/speed_benchmark.py --test_llm
+```
+
+For an online serving comparison, `test/test_speed_comparison.py` benchmarks the OpenAI-compatible R2R and SGLang servers on AIME prompts and reports latency, throughput, and per-request speedup under either fixed-RPS or max-batch-size load.
+
+```bash
+# terminal 1: launch the R2R server
+CUDA_VISIBLE_DEVICES=0,1 python script/inference/launch_r2r_server.py --config-path config/Qwen3-0.6B+Qwen3-32B.yaml --port 30000 --tp-size-quick 1 --tp-size-ref 2 --overlap-tp-schedule
+# terminal 2: launch the SGLang server
+CUDA_VISIBLE_DEVICES=2,3 python -m sglang.launch_server --tp 2 --port 30001 --model-path Qwen/Qwen3-32B
+
+# terminal 3: run the benchmark
+python test/test_speed_comparison.py --num-requests 8 --rps 0.1
 ```
 
 ### 3. 🧪 Train Your Own R2R Router

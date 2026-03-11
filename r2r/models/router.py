@@ -36,7 +36,6 @@ def load_config_from_folder(folder_path: str) -> dict:
         "router_config": router_config,
         "router_path": router_path,
     }
-
 ################ Model Registry, Saving and Loading #################
 MODEL_REGISTRY = {}
 
@@ -285,10 +284,15 @@ def load_model(model_path: str, device: str = "cuda", override_init_args: dict =
         repo_id = None
         filename = None
         if model_path.endswith(".pt"):
-            candidate_repo, candidate_file = os.path.split(model_path)
-            if candidate_repo:
-                repo_id = candidate_repo
-                filename = candidate_file
+            parts = model_path.strip("/").split("/")
+            if len(parts) > 3 and not os.path.exists(model_path):
+                repo_id = "/".join(parts[:2])
+                filename = "/".join(parts[2:])
+            else:
+                candidate_repo, candidate_file = os.path.split(model_path)
+                if candidate_repo:
+                    repo_id = candidate_repo
+                    filename = candidate_file
         else:
             repo_id = model_path
 

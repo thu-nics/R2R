@@ -41,7 +41,7 @@
   },
   "router": {
     "router_name": "Qwen3-0.6B+Qwen3-32B",
-    "router_path": "GY2233/Qwen3_0_6B_Qwen3_32B", 
+    "router_path": "nics-efc/R2R_router_collections/Qwen3-0.6B+Qwen3-32B/default_router.pt",
     "override_init_args":{
       "pretrained_model_name": "Qwen/Qwen3-0.6B"
     }

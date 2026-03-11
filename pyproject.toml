@@ -25,10 +25,14 @@ dependencies = [
     "scikit-learn",
     "setproctitle",
     "gradio",
-    "nvidia-ml-py"
+    "nvidia-ml-py",
+    "nvtx"
 ]
 
 [tool.uv]
+exclude-dependencies = [
+    "pynvml"
+]
 override-dependencies = [
     "sgl-kernel==0.3.8"
 ]

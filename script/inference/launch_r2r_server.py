@@ -48,7 +48,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    args.llm_min_batch_size = int(args.llm_min_batch_size) if args.llm_min_batch_size.isdigit() else [int(x) for x in args.llm_min_batch_size.split(",")]
+    llm_min_batch_size = str(args.llm_min_batch_size)
+    args.llm_min_batch_size = int(llm_min_batch_size) if llm_min_batch_size.isdigit() else [int(x) for x in llm_min_batch_size.split(",")]
     print(f"LLM minimum batch size set to: {args.llm_min_batch_size}")
     
     # Normalize config_path: convert folder to file path if needed
