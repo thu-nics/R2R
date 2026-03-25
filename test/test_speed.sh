@@ -2,7 +2,14 @@
 set -e
 
 N_BACKGROUND=$1
-TEST_IDS=(0 0 0 0 0 5 5 5 5 5 10 10 10 10 10 15 15 15 15 15 20 20 20 20 20 25 25 25 25 25)
+PORT=$2
+OUTPUT_PATH=$3
+TEST_IDS=(0 0 0 10 10 10 15 15 15 20 20 20 25 25 25)
+
+OUTPUT_CSV_ARG=""
+if [ -n "$OUTPUT_PATH" ]; then
+    OUTPUT_CSV_ARG="--output_csv $OUTPUT_PATH"
+fi
 
 pids=()
 
@@ -22,6 +29,7 @@ for ((i=1; i<=N_BACKGROUND; i++)); do
     python test/test_speed.py \
         --input_file test/input_text.txt \
         --input_id "$i" \
+        --port "$PORT" \
         --is_background &
     pids+=("$!")
     sleep 1
@@ -43,7 +51,8 @@ for id in "${TEST_IDS[@]}"; do
     out=$(python test/test_speed.py \
         --input_file test/input_text.txt \
         --input_id "$id" \
-        --output_csv output/s1l1/${N_BACKGROUND}.csv)
+        --port "$PORT" \
+        $OUTPUT_CSV_ARG)
 
     # parse two numbers: <speed> <llm_ratio>
     speed=$(echo "$out" | awk '{print $1}')

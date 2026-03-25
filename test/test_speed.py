@@ -9,7 +9,8 @@ def parse_args():
     parser.add_argument("--input_file", type=str, default="test/input_text.txt")
     parser.add_argument("--input_id", type=int, default=0)
     parser.add_argument("--is_background", action="store_true", default=False)
-    parser.add_argument("--output_csv", type=str, default="output/latency_results.csv")
+    parser.add_argument("--port", type=int, default=30000)
+    parser.add_argument("--output_csv", type=str, default=None)
     return parser.parse_args()
 
 def append_to_csv(csv_path, input_id, speed, llm_ratio):
@@ -31,7 +32,12 @@ with open(args.input_file, "r") as f:
     input_id = -(args.input_id % len(lines)) if args.is_background else args.input_id % len(lines)
     input_text = lines[input_id].strip()
 
-url = "http://0.0.0.0:30000/v1/chat/completions"
+# dataset = datasets.load_dataset("GY2233/AIME-2024-2025", split="train")
+# lines = dataset["FormattedProblem"]
+# input_id = -(args.input_id % len(lines)) if args.is_background else args.input_id % len(lines)
+# input_text = lines[input_id].strip()
+
+url = f"http://0.0.0.0:{args.port}/v1/chat/completions"
 
 # OpenAI-compatible chat completion request
 data = {
@@ -71,7 +77,8 @@ try:
             # Uncomment to see the full response
             speed = completion_tokens/(end_time - start_time)
             print(f"{speed:.2f} {llm_ratio:.4f}")
-            append_to_csv(args.output_csv, args.input_id, speed, llm_ratio)
+            if args.output_csv:
+                append_to_csv(args.output_csv, args.input_id, speed, llm_ratio)
         
         except ValueError as e:
             print(f"Failed to parse JSON response: {e}")
