@@ -134,6 +134,7 @@ async def lifespan(app: FastAPI):
                 quick_sglang_kwargs=quick_sglang_kwargs,
                 reference_sglang_kwargs=reference_sglang_kwargs,
                 overlap_tp_schedule=server_args.overlap_tp_schedule,
+                slm_min_batch_size=server_args.slm_min_batch_size,
                 llm_min_batch_size=server_args.llm_min_batch_size,
             )
             print("System initialized successfully.")

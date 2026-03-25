@@ -129,6 +129,7 @@ class SLDisaggregationSystem:
         reference_sglang_kwargs: Optional[dict] = None,
         is_logits_processor: bool = True,
         overlap_tp_schedule: bool = False,
+        slm_min_batch_size: Union[int, list[int]] = 1,
         llm_min_batch_size: Union[int, list[int]] = 1,
     ):
         """Initialize the SL Disaggregation System for dynamic model selection.
@@ -229,6 +230,7 @@ class SLDisaggregationSystem:
             strategy_kwargs=self.strategy_kwargs,
             mem_fraction_static=small_mem_fraction_static,
             llm_kvcache_size=self.llm_kvcache_size,
+            min_batch_size=slm_min_batch_size,
             master_port=self.slm_master_port,  # Pass master_port to SLMServer
         )
 

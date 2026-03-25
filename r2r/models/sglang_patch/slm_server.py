@@ -49,6 +49,7 @@ class SLMServer:
         strategy_kwargs: Dict = {},
         mem_fraction_static: Optional[float] = None,
         llm_kvcache_size: Optional[Value] = None,
+        min_batch_size: Union[int, list[int]] = 1,
         master_port: Optional[int] = None,
     ):
         self.quick_waiting_line = []
@@ -191,6 +192,7 @@ class SLMServer:
                     self._finished_reqs_queue,  # finished reqs back to system
                     req_port if rank == 0 else None,  # system SUB only on rank 0
                     llm_kvcache_size,
+                    min_batch_size,
                     self.master_port,  # Pass master_port to worker
                 ),
             )
@@ -217,6 +219,13 @@ class SLMServer:
             req.eos_token_ids = scheduler.model_config.hf_eos_token_id
             req.vocab_size = scheduler.model_config.vocab_size
             scheduler.waiting_queue.append(req)
+            outbound_queue.put_nowait([WaitingReq(
+                rid=req.rid, 
+                new_token_ids=[], 
+                sampling_params=SimpleSamplingParams(),
+                status="new",
+            )])
+            scheduler.n_active_reqs += 1
         
         return True
 
@@ -233,6 +242,7 @@ class SLMServer:
         finished_queue: Optional[mp.Queue] = None,
         req_port: Optional[int] = None,
         llm_kvcache_size: Optional[Value] = None,
+        min_batch_size: Union[int, list[int]] = 1,
         master_port: Optional[int] = None,
     ):
         # Register signal handler to ensure finally block execution on terminate
@@ -260,6 +270,7 @@ class SLMServer:
             moe_ep_rank=0,
             pp_rank=0, # Pipeline parallelism is not Supported
             llm_kvcache_size=llm_kvcache_size,
+            min_batch_size=min_batch_size,
         )
         # Setup system SUB socket on rank 0
         if req_port is not None:
@@ -422,8 +433,8 @@ class SLMServer:
 
     @staticmethod
     def process_result_from_llm(rank: int, scheduler: Scheduler, commit_msgs, finished_queue: Optional[mp.Queue] = None, outbound_queue: Optional[mp.Queue] = None):
-        if rank == 0 and hasattr(scheduler, "n_generated_tokens"):
-            scheduler.n_generated_tokens += len(commit_msgs)
+        if rank == 0 and hasattr(scheduler, "n_llm_generated_tokens"):
+            scheduler.n_llm_generated_tokens += len(commit_msgs)
         better_token_ids = {}
         returned_rid_list = []
         for waiting_req in commit_msgs:
@@ -626,6 +637,7 @@ class SLMServer:
         # Use switching strategy to decide which model to use for each input
         model_choices = router.route(model_outputs).cpu()
         # TODO: merge router into sglang
+        model_choices = torch.bernoulli(torch.full((len(batch.reqs),), 0.10))
 
         # Check if reference model is needed for any prompt
         reference_needed = torch.any(model_choices)
@@ -682,13 +694,16 @@ class SLMServer:
         if rank == 0:
             if not hasattr(scheduler, "last_status_time"):
                 scheduler.last_status_time = time.perf_counter()
-            if not hasattr(scheduler, "n_generated_tokens"):
-                scheduler.n_generated_tokens = 0
-            scheduler.n_generated_tokens += batch.batch_size() - len(req_to_send)
+            if not hasattr(scheduler, "n_slm_generated_tokens"):
+                scheduler.n_slm_generated_tokens = 0
+            if not hasattr(scheduler, "n_llm_generated_tokens"):
+                scheduler.n_llm_generated_tokens = 0
+            scheduler.n_slm_generated_tokens += batch.batch_size() - len(req_to_send)
             gap_latency = time.perf_counter() - scheduler.last_status_time
-            if gap_latency > 4.0:
-                print(f"[quick rank{rank}] throughput: {scheduler.n_generated_tokens / gap_latency:.2f} tokens/s")
-                scheduler.n_generated_tokens = 0
+            if gap_latency > 10:
+                print(f"[quick rank{rank}] throughput: {(scheduler.n_slm_generated_tokens + scheduler.n_llm_generated_tokens) / gap_latency:.2f} tokens/s, llm_ratio: {scheduler.n_llm_generated_tokens / (scheduler.n_slm_generated_tokens + scheduler.n_llm_generated_tokens + 1e-8):.2%}")
+                scheduler.n_slm_generated_tokens = 0
+                scheduler.n_llm_generated_tokens = 0
                 scheduler.last_status_time = time.perf_counter()
         batch.output_ids = result.next_token_ids
         finished_reqs = []
@@ -705,6 +720,7 @@ class SLMServer:
             if req.finished():
                 scheduler.tree_cache.cache_finished_req(req)
                 finished_reqs.append(req)
+                scheduler.n_active_reqs -= 1
 
         if len(finished_reqs) > 0 and rank == 0:
             SLMServer.process_finished_requests(finished_reqs, scheduler.tokenizer, finished_queue, outbound_queue)

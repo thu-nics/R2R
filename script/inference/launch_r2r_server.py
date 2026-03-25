@@ -41,17 +41,20 @@ if __name__ == "__main__":
     parser.add_argument("--overlap-tp-schedule", action="store_true", default=False)
     parser.add_argument('--threshold', type=float, default=0.5,
                         help='Threshold for the neural switching strategy (default: 0.5).')
-    parser.add_argument('--llm-min-batch-size', type=str, default=1,
+    parser.add_argument('--slm-min-batch-size', type=str, default="1",
+                        help='Minimum batch size for the LLM (default: 1).')
+    parser.add_argument('--llm-min-batch-size', type=str, default="1",
                         help='Minimum batch size for the LLM (default: 1).')
 
     mp.set_start_method("spawn", force=True)
 
     args = parser.parse_args()
 
-    llm_min_batch_size = str(args.llm_min_batch_size)
-    args.llm_min_batch_size = int(llm_min_batch_size) if llm_min_batch_size.isdigit() else [int(x) for x in llm_min_batch_size.split(",")]
+    args.llm_min_batch_size = int(args.llm_min_batch_size) if args.llm_min_batch_size.isdigit() else [int(x) for x in args.llm_min_batch_size.split(",")]
+    args.slm_min_batch_size = int(args.slm_min_batch_size) if args.slm_min_batch_size.isdigit() else [int(x) for x in args.slm_min_batch_size.split(",")]
     print(f"LLM minimum batch size set to: {args.llm_min_batch_size}")
-    
+    print(f"SLM minimum batch size set to: {args.slm_min_batch_size}")
+
     # Normalize config_path: convert folder to file path if needed
     config_path = args.config_path
     if os.path.isdir(config_path):

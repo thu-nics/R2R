@@ -672,3 +672,72 @@ class LLMScheduler(Scheduler):
             new_batch.decoding_reqs = None
 
         return new_batch
+
+    def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
+        # Merge the prefill batch into the running batch
+        chunked_req_to_exclude = set()
+        if self.chunked_req:
+            # Move the chunked request out of the batch so that we can merge
+            # only finished requests to running_batch.
+            chunked_req_to_exclude.add(self.chunked_req)
+            self.tree_cache.cache_unfinished_req(self.chunked_req)
+            # chunked request keeps its rid but will get a new req_pool_idx
+            self.req_to_token_pool.free(self.chunked_req.req_pool_idx)
+        if self.last_batch and self.last_batch.forward_mode.is_extend():
+            if self.last_batch.chunked_req is not None:
+                # In the context pipeline parallelism, after the last chunk, the current microbatch still track outdated chunked_req.
+                # We need to discard it.
+                chunked_req_to_exclude.add(self.last_batch.chunked_req)
+
+            # Filter batch
+            last_bs = self.last_batch.batch_size()
+            self.last_batch.filter_batch(
+                chunked_req_to_exclude=list(chunked_req_to_exclude)
+            )
+            if self.last_batch.batch_size() < last_bs:
+                self.running_batch.batch_is_full = False
+
+            # Merge the new batch into the running batch.
+            # For prefill-only batch, we can avoid going through decoding step.
+            if not self.last_batch.is_empty() and not self.last_batch.is_prefill_only:
+                if self.running_batch.is_empty():
+                    self.running_batch = self.last_batch
+                else:
+                    # Merge running_batch with prefill batch
+                    self.running_batch.merge_batch(self.last_batch)
+                if self.batch_not_need is not None:
+                    self.running_batch = self.check_batch_status(self.running_batch)
+
+        new_batch = self.get_new_batch_prefill()
+
+        need_dp_attn_preparation = require_mlp_sync(self.server_args)
+
+        if need_dp_attn_preparation and not self.spec_algorithm.is_none():
+            # In speculative decoding, prefill batches and decode batches cannot be processed in the same DP attention group.
+            # We prepare idle batches in advance to skip preparing decode batches when there are prefill batches in the group.
+            new_batch = self.prepare_mlp_sync_batch(new_batch)
+            need_dp_attn_preparation = new_batch is None
+
+        if new_batch is not None:
+            # Run prefill first if possible
+            ret = new_batch
+        else:
+            # Run decode
+            if not self.running_batch.is_empty():
+                if self.batch_not_need is not None:
+                    self.running_batch = self.check_batch_status(self.running_batch)
+                self.running_batch = self.update_running_batch(self.running_batch)
+                ret = self.running_batch if not self.running_batch.is_empty() else None
+            else:
+                ret = None
+
+        # Handle DP attention
+        if need_dp_attn_preparation:
+            if (
+                self.server_args.load_balance_method == "minimum_tokens"
+                and self.forward_ct % 40 == 0
+            ):
+                self.handle_dp_balance_data(ret)
+            ret = self.prepare_mlp_sync_batch(ret)
+
+        return ret

@@ -184,6 +184,7 @@ def __init__(
     dp_rank: Optional[int],
     dp_balance_meta: Optional[DPBalanceMeta] = None,
     llm_kvcache_size: Optional[Value] = None,
+    min_batch_size: Union[int, list[int]] = 1,
 ):
     # Parse args
     self.server_args = server_args
@@ -213,6 +214,8 @@ def __init__(
     self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
     self.enable_hicache_storage = server_args.hicache_storage_backend is not None
     self.page_size = server_args.page_size
+    self.min_batch_size = min_batch_size
+    self.n_active_reqs = 0
 
     self.attn_tp_rank, self.attn_tp_size, self.attn_dp_rank = (
         compute_dp_attention_world_info(
@@ -562,14 +565,18 @@ def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
 
         # Merge the new batch into the running batch.
         # For prefill-only batch, we can avoid going through decoding step.
-        if not self.last_batch.is_empty() and not self.last_batch.is_prefill_only:
+        if not self.last_batch.is_empty() and not self.last_batch.is_prefill_only and not hasattr(self.last_batch, 'merged'):
             if self.running_batch.is_empty():
                 self.running_batch = self.last_batch
+                self.last_batch.merged = True
             else:
                 # Merge running_batch with prefill batch
                 self.running_batch.merge_batch(self.last_batch)
+                self.last_batch.merged = True
+
             if self.batch_not_need is not None:
                 self.running_batch = self.check_batch_status(self.running_batch)
+
 
     new_batch = self.get_new_batch_prefill()
 
@@ -586,13 +593,18 @@ def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
         ret = new_batch
     else:
         # Run decode
-        if not self.running_batch.is_empty():
+        n_need_reqs = len([req for req in self.running_batch.reqs if req.status == "need"])
+        n_active_reqs = min(self.n_active_reqs, len(self.min_batch_size)) if isinstance(self.min_batch_size, list) else self.n_active_reqs
+        min_batch_size = self.min_batch_size[n_active_reqs - 1] if isinstance(self.min_batch_size, list) else self.min_batch_size
+        if not self.running_batch.is_empty() and n_need_reqs >= min_batch_size:
             if self.batch_not_need is not None:
                 self.running_batch = self.check_batch_status(self.running_batch)
             self.running_batch = self.update_running_batch(self.running_batch)
             ret = self.running_batch if not self.running_batch.is_empty() else None
         else:
             ret = None
+            if n_need_reqs > 0:
+                self.last_batch = self.running_batch
 
     # Handle DP attention
     if need_dp_attn_preparation:

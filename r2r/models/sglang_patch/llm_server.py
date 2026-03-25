@@ -290,8 +290,10 @@ class LLMServer:
                 finished_rid_list.add(waiting_req.rid)
                 scheduler.n_active_reqs -= 1
                 continue
-            if waiting_req.rid not in req_already_prefilled:
+            elif waiting_req.status == "new":
                 scheduler.n_active_reqs += 1
+                continue
+            if waiting_req.rid not in req_already_prefilled:       
                 origin_input_ids = waiting_req.new_token_ids
                 origin_input_text = scheduler.tokenizer.decode(origin_input_ids)
                 new_req = Req(

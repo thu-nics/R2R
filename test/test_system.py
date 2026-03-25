@@ -77,6 +77,7 @@ def main():
     # Output options
     parser.add_argument('--output-csv', type=str, default=None,
                         help='Path to output CSV file for results')
+    parser.add_argument("--llm-min-batch-size", type=int, default=1)
     args = parser.parse_args()
 
     print("=" * 60)
@@ -134,6 +135,7 @@ def main():
         quick_sglang_kwargs=quick_sglang_kwargs,
         reference_sglang_kwargs=reference_sglang_kwargs,
         overlap_tp_schedule=args.overlap_tp_schedule,
+        llm_min_batch_size=args.llm_min_batch_size,
     )
     print("Generator initialized.\n")
 
