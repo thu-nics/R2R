@@ -195,12 +195,9 @@ class ModelController:
             self.tokenizer.decode([token_id]) for token_id in self.stop_token_ids
         ]
 
-        # Initialize the DeterministicLogitProcessor
-        self.deterministic_logit_processor = DeterministicLogitProcessor(
-            stop_token_ids=self.stop_token_ids,
-            eos_token_id=self.tokenizer.eos_token_id,
-            num_continuation=-1  # Default value, will be updated when used
-        )
+        # CustomLogitProcessor.to_str() serializes the class, not the instance state.
+        # Keep this processor stateless and pass runtime parameters via custom_params.
+        self.deterministic_logit_processor = DeterministicLogitProcessor()
 
     def _is_eos_generated(self, token_id: int) -> bool:
         """Check if generated token is an EOS token"""
@@ -265,6 +262,7 @@ class ModelController:
         num_samples: int = 1,
         top_p: float = 1.0,
         top_k: int = -1,
+        min_p: float = 0.0,
         num_continuation: int = 1
     ) -> List[Dict]:
         """
@@ -279,6 +277,8 @@ class ModelController:
             temperature: Temperature for generation (higher = more random, lower = more deterministic)
             num_samples: Number of samples to generate per input
             top_p: Top-p probability threshold for nucleus sampling (0 < top_p ≤ 1)
+            top_k: Top-k sampling parameter
+            min_p: Min-p threshold relative to the max probability token
             num_continuation: Number of continuations to generate
             
         Returns:
@@ -290,19 +290,19 @@ class ModelController:
         if self.mode == 'direct':
             return self._generate_continuation_direct(
                 update_context_tokens, current_token, model_type, max_new_tokens,
-                temperature, num_samples, top_p, top_k, num_continuation
+                temperature, num_samples, top_p, top_k, min_p, num_continuation
             )
         elif self.mode == 'api':
             return self._generate_continuation_api(
                 update_context_tokens, current_token, model_type, max_new_tokens,
-                temperature, num_samples, top_p, top_k, num_continuation
+                temperature, num_samples, top_p, top_k, min_p, num_continuation
             )
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
     def _generate_continuation_direct(
         self, update_context_tokens, current_token, model_type, max_new_tokens,
-        temperature, num_samples, top_p, top_k, num_continuation
+        temperature, num_samples, top_p, top_k, min_p, num_continuation
     ) -> List[Dict]:
         """Generate continuation using direct engine access"""
         # Select appropriate model for model-based generation
@@ -324,15 +324,21 @@ class ModelController:
             "top_k": top_k,
             "max_new_tokens": max_new_tokens,
         }
+        if float(min_p) > 0.0:
+            sampling_params["min_p"] = min_p
 
         # Set EOS token behavior based on num_continuation value
         if num_continuation == 1:
             # For single continuation, use our custom EOS tokens
             sampling_params["stop_token_ids"] = self.stop_token_ids
         elif num_continuation > 1:
-            # For multiple continuations, update the logit processor's num_continuation
-            self.deterministic_logit_processor.num_continuation = num_continuation
-            sampling_params["custom_params"] = {'dummy_for_req': 1}
+            # For multiple continuations, pass runtime state through custom_params
+            # because the processor is reconstructed from its class on the engine side.
+            sampling_params["custom_params"] = {
+                "stop_token_ids": self.stop_token_ids,
+                "eos_token_id": self.tokenizer.eos_token_id,
+                "num_continuation": num_continuation,
+            }
         # When num_continuation == -1, we don't set stop_token_ids, 
         # letting the model generate until its default EOS or max_new_tokens
 
@@ -373,7 +379,7 @@ class ModelController:
 
     def _generate_continuation_api(
         self, update_context_tokens, current_token, model_type, max_new_tokens,
-        temperature, num_samples, top_p, top_k, num_continuation
+        temperature, num_samples, top_p, top_k, min_p, num_continuation
     ) -> List[Dict]:
         """Generate continuation using API requests"""
         # Select appropriate API endpoint based on model type
@@ -400,6 +406,8 @@ class ModelController:
             "top_k": top_k,
             "max_new_tokens": max_new_tokens,
         }
+        if float(min_p) > 0.0:
+            sampling_params["min_p"] = min_p
 
         # Set EOS token behavior based on num_continuation value
         custom_logit_processor = None
@@ -407,9 +415,13 @@ class ModelController:
             # For single continuation, use our custom EOS tokens
             sampling_params["stop_token_ids"] = self.stop_token_ids
         elif num_continuation > 1:
-            # For multiple continuations, update the logit processor's num_continuation
-            self.deterministic_logit_processor.num_continuation = num_continuation
-            sampling_params["custom_params"] = {'dummy_for_req': 1}
+            # For multiple continuations, pass runtime state through custom_params
+            # because the processor is reconstructed from its class on the engine side.
+            sampling_params["custom_params"] = {
+                "stop_token_ids": self.stop_token_ids,
+                "eos_token_id": self.tokenizer.eos_token_id,
+                "num_continuation": num_continuation,
+            }
             custom_logit_processor = self.deterministic_logit_processor.to_str()
         # When num_continuation == -1, we don't set stop_token_ids, 
         # letting the model generate until its default EOS or max_new_tokens
@@ -461,6 +473,7 @@ class ModelController:
         num_samples: int = 1,
         top_p: float = 1.0,
         top_k: int = -1,
+        min_p: float = 0.0,
         num_continuation: int = 1
     ) -> List[Dict]:
         """
@@ -475,6 +488,7 @@ class ModelController:
             num_samples: Number of samples to generate
             top_p: Top-p probability threshold for nucleus sampling
             top_k: Top-k sampling parameter
+            min_p: Min-p threshold relative to the max probability token
             num_continuation: Number of continuations to generate
             
         Returns:
@@ -493,6 +507,7 @@ class ModelController:
             num_samples=num_samples,
             top_p=top_p,
             top_k=top_k,
+            min_p=min_p,
             num_continuation=num_continuation
         )
 
@@ -788,9 +803,16 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
     """A dummy logit processor that changes the logits to always
     sample the given token id.
     """
-    def __init__(self, stop_token_ids: List[int], eos_token_id: int, num_continuation: int):
+    def __init__(
+        self,
+        stop_token_ids: Optional[List[int]] = None,
+        eos_token_id: Optional[int] = None,
+        num_continuation: int = -1,
+    ):
+        # SGLang reconstructs the processor via class() on the scheduler side.
+        # Keep zero-arg construction valid and treat instance state as fallback only.
         self.eos_token_id = eos_token_id
-        self.stop_token_ids_set = set(stop_token_ids)  # Convert to set for O(1) lookup
+        self.stop_token_ids_set = set(stop_token_ids or [])
         self.num_continuation = num_continuation
 
     def __call__(self, logits: Tensor, custom_param_list: List[Dict]):
@@ -800,9 +822,6 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
             custom_param_list: List[Dict]. The size of the list is the same as the batch size.
                 Each element in the list is a dictionary with the keys and values: input_ids (List[int]), output_ids (List[int]), __req__ (Req); as well as the keys and values specified in the custom_params in sampling_params.
         """
-        if self.num_continuation == -1:
-            raise ValueError("num_continuation should not be -1. Ensure it is set before invoking the model's generation function, which requires a valid continuation limit.")
-            
         batch_size = logits.shape[0]
         assert batch_size == len(custom_param_list)
         
@@ -816,18 +835,32 @@ class DeterministicLogitProcessor(CustomLogitProcessor):
             req = param_dict["__req__"]
             if not hasattr(req, "num_continue_count"):
                 req.num_continue_count = 0
+
+            num_continuation = param_dict.get("num_continuation", self.num_continuation)
+            if num_continuation == -1:
+                raise ValueError("num_continuation should not be -1. Ensure it is set before invoking the model's generation function, which requires a valid continuation limit.")
+
+            stop_token_ids = param_dict.get("stop_token_ids")
+            stop_token_ids_set = (
+                set(stop_token_ids) if stop_token_ids is not None else self.stop_token_ids_set
+            )
             
             # Check if this batch item has reached the continuation limit
-            if req.num_continue_count >= self.num_continuation:
+            if req.num_continue_count >= num_continuation:
                 eos_mask[i] = True
             
             # Use set lookup for O(1) time complexity instead of O(n) list search
-            if predicted_tokens[i].item() in self.stop_token_ids_set:
+            if predicted_tokens[i].item() in stop_token_ids_set:
                 req.num_continue_count += 1
         
-        # Apply EOS forcing to all relevant batch items at once using vectorized operations
+        # Apply EOS forcing to all relevant batch items.
         if eos_mask.any():
             logits[eos_mask, :] = -float("inf")
-            logits[eos_mask, self.eos_token_id] = 1.0
+            eos_rows = torch.nonzero(eos_mask, as_tuple=False).flatten().tolist()
+            for row_idx in eos_rows:
+                eos_token_id = custom_param_list[row_idx].get("eos_token_id", self.eos_token_id)
+                if eos_token_id is None:
+                    raise ValueError("eos_token_id must be provided for EOS forcing.")
+                logits[row_idx, eos_token_id] = 1.0
        
         return logits 

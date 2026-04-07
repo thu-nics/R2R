@@ -1,0 +1,254 @@
+import argparse
+import pandas as pd
+from tqdm import tqdm
+import torch
+from typing import List
+import math
+import os
+import json
+
+from r2r.data.generation_controller import DivergePoint
+from r2r.data.verify_model import VerifyModel
+
+VERIFY_MODEL_PATH = "/mnt/models/Qwen/Qwen2.5-72B-Instruct"
+VERIFY_MAX_NEW_TOKENS = 16
+VERIFY_CHAT_TEMPLATE_KWARGS = None
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='verify CSV with divergent text pairs')
+    parser.add_argument('--input_csv', type=str, required=True, help='Path to input CSV file')
+    parser.add_argument('--output_csv', type=str, default=None, 
+                        help='Path to output CSV file')
+    parser.add_argument('--batch_size', type=int, default=64, 
+                        help='Batch size for processing')
+    parser.add_argument('--verify_model', type=str, default=VERIFY_MODEL_PATH,
+                        help='Verify model to use')
+    parser.add_argument('--verify_mode', type=str, default='common_context',
+                        choices=['common_context'],
+                        help='Judgment mode to use for evaluation')
+    parser.add_argument('--tp_size', type=int, default=4,
+                        help='Tensor parallel size')
+    parser.add_argument('--mem_fraction', type=float, default=0.9,
+                        help='Memory fraction for verify model')
+    parser.add_argument('--save_interval', type=int, default=100,
+                        help='Save results every N batches. 0 means save only at the end.')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume processing from existing output CSV file')
+    return parser.parse_args()
+
+def convert_row_to_diverge_point(row):
+    """Convert a DataFrame row to a DivergePoint object."""
+    return DivergePoint(
+        data_id=row.get('data_id', 0),
+        token_id=row.get('token_id', 0),
+        small_diverge_text=row['small_diverge_text'],
+        reference_diverge_text=row['reference_diverge_text'],
+        common_context=row['common_context'],
+        pred_small_token=row.get('pred_small_token', []),
+        pred_small_text=row.get('pred_small_text', ''),
+    )
+
+def save_results_to_csv(df_to_save, output_csv, mode='w', header=True):
+    """Saves a DataFrame to a CSV file with specified mode and header settings."""
+    print(f"Saving results to {output_csv} (mode: {mode}, header: {header})...")
+    try:
+        df_to_save.to_csv(output_csv, mode=mode, header=header, index=False)
+        print(f"Results successfully saved to {output_csv}")
+    except Exception as e:
+        print(f"Error saving results to {output_csv}: {e}")
+
+def handle_periodic_save(args, results_to_save, batch_idx, num_batches, is_first_save):
+    """Handles periodic saving of results during processing."""
+    if args.save_interval <= 0 or not results_to_save:
+        return results_to_save, is_first_save # No periodic saving or nothing to save
+
+    is_last_batch = (batch_idx == num_batches - 1)
+    should_save_now = ((batch_idx + 1) % args.save_interval == 0) or is_last_batch
+
+    if should_save_now:
+        print(f"\nProcessing results after batch {batch_idx + 1} for periodic saving...")
+        save_df = pd.DataFrame(results_to_save)
+        write_header = not os.path.exists(args.output_csv) or is_first_save
+        save_results_to_csv(save_df, args.output_csv, mode='a', header=write_header)
+        results_to_save = [] # Clear buffer
+        is_first_save = False # Header has been handled for subsequent appends
+    
+    return results_to_save, is_first_save
+
+def handle_final_save(args, df, all_scores, verify_responses):
+    """Handles the final save operation if periodic saving was not used."""
+    if args.save_interval == 0:
+        print("Processing final results...")
+        # Ensure columns exist before assigning
+        if 'divergent' not in df.columns:
+            df['divergent'] = None
+        if 'verify_response' not in df.columns:
+            df['verify_response'] = None
+            
+        # Check length compatibility before assignment
+        if len(all_scores) == len(df) and len(verify_responses) == len(df):
+            df['divergent'] = all_scores
+            df['verify_response'] = verify_responses
+            save_results_to_csv(df, args.output_csv, mode='w', header=True) # Overwrite
+        else:
+            print(f"Error: Length mismatch. Scores ({len(all_scores)}), Responses ({len(verify_responses)}), DataFrame ({len(df)}). Cannot perform final save.")
+
+def handle_resume(args, df):
+    """
+    Handles resume functionality by checking existing output CSV and determining starting position.
+    Returns the starting row index for processing.
+    """
+    if not args.resume:
+        return 0
+    
+    if not os.path.exists(args.output_csv):
+        print(f"Resume requested but output file {args.output_csv} does not exist. Starting from beginning.")
+        return 0
+    
+    print(f"Resume requested. Loading existing results from {args.output_csv}")
+    try:
+        existing_df = pd.read_csv(args.output_csv)
+        
+        # Check if the required verification columns exist
+        if 'divergent' not in existing_df.columns or 'verify_response' not in existing_df.columns:
+            print("Warning: Existing output file doesn't have verification columns. Starting from beginning.")
+            return 0
+        
+        # Count rows that have been processed (non-null divergent and verify_response)
+        processed_mask = (existing_df['divergent'].notna()) & (existing_df['verify_response'].notna())
+        num_processed = processed_mask.sum()
+        
+        print(f"Found {num_processed} already processed rows out of {len(existing_df)} total rows.")
+        
+        # Ensure the existing data matches the input data for the processed rows
+        if len(existing_df) > len(df):
+            print(f"Warning: Existing output has more rows ({len(existing_df)}) than input ({len(df)}). Starting from beginning.")
+            return 0
+        
+        # Check if the processed rows match the input data
+        for i in range(min(num_processed, len(df))):
+            if processed_mask.iloc[i]:
+                # Compare key columns to ensure data consistency
+                for col in ['small_diverge_text', 'reference_diverge_text', 'common_context']:
+                    if col in existing_df.columns and existing_df.iloc[i][col] != df.iloc[i][col]:
+                        print(f"Warning: Data mismatch at row {i} in column {col}. Starting from beginning.")
+                        return 0
+        
+        print(f"Resuming from row {num_processed}")
+        return num_processed
+        
+    except Exception as e:
+        print(f"Error loading existing results: {e}. Starting from beginning.")
+        return 0
+
+def main():
+    args = parse_args()
+
+    # Decide output csv
+    if args.output_csv is None:
+        args.output_csv = args.input_csv.replace('.csv', '_verify.csv')
+    
+    # Load the CSV file
+    print(f"Loading CSV from {args.input_csv}")
+    df = pd.read_csv(args.input_csv)
+    
+    # Verify required columns exist
+    required_columns = ['small_diverge_text', 'reference_diverge_text', 'common_context']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"CSV is missing required columns: {missing_columns}")
+    
+    # Handle resume functionality
+    start_row = handle_resume(args, df)
+    
+    # If resuming and we've processed all rows, exit early
+    if start_row >= len(df):
+        print("All rows have already been processed. Nothing to do.")
+        return
+    
+    # Initialize the verify model
+    verify_model = VerifyModel(
+        model_name=args.verify_model,
+        verify_mode=args.verify_mode,
+        max_new_tokens=VERIFY_MAX_NEW_TOKENS,
+        mem_fraction_static=args.mem_fraction,
+        tp_size=args.tp_size,
+        apply_chat_template_kwargs=VERIFY_CHAT_TEMPLATE_KWARGS
+    )
+    
+    # Process the data in batches, starting from the resume point
+    total_rows = len(df)
+    remaining_rows = total_rows - start_row
+    start_batch_idx = start_row // args.batch_size
+    num_batches = math.ceil(remaining_rows / args.batch_size)
+    
+    # Prepare for results
+    all_scores = []
+    verify_responses = []
+    results_to_save = [] # For periodic saving
+    is_first_save = True # For header management when appending
+    
+    # If resuming, we're not writing the first save (header already exists)
+    if args.resume and os.path.exists(args.output_csv):
+        is_first_save = False
+    
+    print(f"Processing {remaining_rows} remaining rows in {num_batches} batches (starting from row {start_row})")
+    
+    for batch_idx in tqdm(range(num_batches), desc="Judging batches"):
+        # Calculate actual row indices
+        actual_start_idx = start_row + (batch_idx * args.batch_size)
+        actual_end_idx = min(actual_start_idx + args.batch_size, total_rows)
+        batch_df = df.iloc[actual_start_idx:actual_end_idx]
+        
+        # Convert batch rows to DivergePoint objects
+        batch_diverge_points = [convert_row_to_diverge_point(row) for _, row in batch_df.iterrows()]
+        
+        # Process the batch
+        batch_comparison_points = verify_model.batch_compare_diverge_points(batch_diverge_points)
+        
+        # Extract results
+        batch_scores = [point.similarity_score for point in batch_comparison_points]
+        batch_responses = [point.verify_response for point in batch_comparison_points]
+        
+        # Store results for final dataframe if not saving periodically
+        if args.save_interval == 0:
+            all_scores.extend(batch_scores)
+            verify_responses.extend(batch_responses)
+        else:
+            # Prepare results for periodic saving
+            for i, (_, original_row) in enumerate(batch_df.iterrows()):
+                row_dict = original_row.to_dict()
+                row_dict['divergent'] = batch_scores[i]
+                row_dict['verify_response'] = batch_responses[i]
+                results_to_save.append(row_dict)
+
+        # Handle periodic saving (adjust batch index for periodic saving logic)
+        results_to_save, is_first_save = handle_periodic_save(args, results_to_save, batch_idx, num_batches, is_first_save)
+    
+    # Handle final save if necessary (i.e., if save_interval == 0)
+    if args.save_interval == 0:
+        if args.resume and start_row > 0:
+            # For resume with final save, we need to merge with existing data
+            print("Processing final results for resume...")
+            try:
+                existing_df = pd.read_csv(args.output_csv)
+                # Update the remaining rows
+                existing_df.loc[start_row:, 'divergent'] = all_scores
+                existing_df.loc[start_row:, 'verify_response'] = verify_responses
+                save_results_to_csv(existing_df, args.output_csv, mode='w', header=True)
+            except Exception as e:
+                print(f"Error merging with existing results: {e}")
+                # Fallback: save only new results
+                df_subset = df.iloc[start_row:].copy()
+                df_subset['divergent'] = all_scores
+                df_subset['verify_response'] = verify_responses
+                save_results_to_csv(df_subset, args.output_csv.replace('.csv', '_resume_partial.csv'), mode='w', header=True)
+        else:
+            handle_final_save(args, df, all_scores, verify_responses)
+    
+    # Clean up
+    verify_model.shutdown()
+    print("Done!")
+
+if __name__ == "__main__":
+    main()
