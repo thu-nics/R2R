@@ -1348,7 +1348,7 @@ def create_demo(r2r_client: R2RSubprocessClient, single_llm_client: SingleLLMSub
         ---
         
         **R2R** combines small and large language models by routing only critical tokens.
-        [📑 Paper](https://arxiv.org/abs/2505.21600) | [🌐 Project Page](https://fuvty.github.io/R2R_Project_Page/) | [🤗 HuggingFace](https://huggingface.co/papers/2505.21600)
+        [📑 Paper](https://arxiv.org/abs/2505.21600) | [🌐 Project Page](https://fuvty.github.io/thinking_yard_project_page/projects/r2r/) | [🤗 HuggingFace](https://huggingface.co/papers/2505.21600)
         
         **Feel free to star our repo or cite our paper if you find it useful!** ⭐
         """)

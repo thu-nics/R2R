@@ -6,7 +6,7 @@
   <h3>Efficiently Navigating Divergent Reasoning Paths with Small-Large Model Token Routing</h3>
 
   <p>
-    <a href="https://fuvty.github.io/R2R_Project_Page/">🌐 <b>Project Page</b></a> •
+    <a href="https://fuvty.github.io/thinking_yard_project_page/projects/r2r/">🌐 <b>Project Page</b></a> •
     <a href="https://arxiv.org/abs/2505.21600">📑 <b>arXiv</b></a> •
     <a href="https://huggingface.co/collections/nics-efc/r2r">🤗 <b>HuggingFace</b></a>
   </p>
@@ -32,6 +32,8 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 
 ## 📰 News
 
+* [2026/10] R2R can now be served with [TokenRouter](https://github.com/thu-nics/TokenRouter), our efficient serving system for token-level LLM routing. We recommend using TokenRouter for R2R serving; see the [Quick Start](https://github.com/thu-nics/TokenRouter#quick-start) for setup and usage.
+
 * [2026/01] `v0.1` release! Major system update to support online serving with OpenAI-compatible API. Support batch inference, CUDA graph, and much more, with a cleaner interface.
 
 * [2025/10] Added support for the Qwen3 model family. Router checkpoints are now available [here](https://huggingface.co/nics-efc/R2R_router_collections).
@@ -42,7 +44,7 @@ By combining DeepSeek's R1-1.5B and R1-32B models, **R2R-5.6B achieves a 2.8× s
 
 ## 🔗 Interactive Demo
 
-Check out our interactive demo and see R2R in action by visiting our [project page](https://fuvty.github.io/R2R_Project_Page/).
+Check out our interactive demo and see R2R in action by visiting our [project page](https://fuvty.github.io/thinking_yard_project_page/projects/r2r/).
 
 
 ## 🛠️ Environment Setup
@@ -296,7 +298,16 @@ Explore more efficient LLM projects from us:
 
 <table style="border: none; border-collapse: collapse;" align="center">
 <tr>
-<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<td align="center" valign="top" width="20%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<div style="height: 5em; display: flex; align-items: center; justify-content: center;">
+<a href="https://github.com/thu-nics/TokenRouter">
+<img src="https://raw.githubusercontent.com/thu-nics/TokenRouter/main/resource/logo.png" alt="TokenRouter Logo" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
+</a>
+</div>
+<a href="https://github.com/thu-nics/TokenRouter"><b>TkR</b></a>
+<br/><sub>Efficient serving for token-level LLM routing</sub>
+</td>
+<td align="center" valign="top" width="20%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
 <div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/TaH">
 <img src="https://raw.githubusercontent.com/thu-nics/TaH/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
@@ -305,7 +316,7 @@ Explore more efficient LLM projects from us:
 <a href="https://github.com/thu-nics/TaH"><b>TaH</b></a>
 <br/><sub>Selective latent thinking for reasoning LLMs</sub>
 </td>
-<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<td align="center" valign="top" width="20%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
 <div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/C2C">
 <img src="https://raw.githubusercontent.com/thu-nics/C2C/main/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
@@ -314,7 +325,7 @@ Explore more efficient LLM projects from us:
 <a href="https://github.com/thu-nics/C2C"><b>C2C</b></a>
 <br/><sub>Communicate through KV-Cache between LLMs</sub>
 </td>
-<td align="center" valign="top" width="25%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
+<td align="center" valign="top" width="20%" style="border: none; border-right: 1px solid rgba(128, 128, 128, 0.3); padding: 10px; min-width: 50px;">
 <div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/FrameFusion">
 <img src="https://raw.githubusercontent.com/thu-nics/FrameFusion/main/example/image/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
@@ -323,7 +334,7 @@ Explore more efficient LLM projects from us:
 <a href="https://github.com/thu-nics/FrameFusion"><b>FrF</b></a>
 <br/><sub>Efficient video token reduction for LVLMs</sub>
 </td>
-<td align="center" valign="top" width="25%" style="border: none; padding: 10px; min-width: 50px;">
+<td align="center" valign="top" width="20%" style="border: none; padding: 10px; min-width: 50px;">
 <div style="height: 5em; display: flex; align-items: center; justify-content: center;">
 <a href="https://github.com/thu-nics/MoA">
 <img src="https://raw.githubusercontent.com/thu-nics/MoA/master/resource/logo.png" style="max-height: 5em; max-width: 100%; height: auto; width: auto;" />
